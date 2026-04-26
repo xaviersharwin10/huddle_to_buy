@@ -1,0 +1,24 @@
+{
+  "name": "@huddle/contracts",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "hardhat compile",
+    "typecheck": "tsc --noEmit",
+    "test": "hardhat test",
+    "deploy:gensyn": "hardhat run scripts/deploy.ts --network gensynTestnet",
+    "keeper:watch": "hardhat run scripts/keeper.ts --network gensynTestnet",
+    "keeperhub:register": "hardhat run scripts/keeperhub-register.ts --network gensynTestnet"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.1.0",
+    "ethers": "^6.16.0"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "dotenv": "^16.4.7",
+    "hardhat": "^2.22.17",
+    "typescript": "^5.6.3"
+  }
+}
