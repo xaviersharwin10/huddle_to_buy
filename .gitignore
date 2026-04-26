@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+.next/
+.env
+.env.*
+!.env.*.example
+logs/
+.claude/
+axl/data/
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+*.md
+!README.md
+
+# Lockfiles (ignored to keep commits small)
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+simulate-commits.sh

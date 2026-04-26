@@ -1,0 +1,16 @@
+{
+  "name": "huddle",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@10.21.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "agent": "pnpm --filter @huddle/agent",
+    "contracts": "pnpm --filter @huddle/contracts",
+    "axl": "bash axl/scripts/run.sh"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
