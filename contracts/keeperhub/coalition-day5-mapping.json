@@ -1,0 +1,43 @@
+{
+  "name": "huddle-coalition-day5",
+  "network": "gensynTestnet",
+  "chainId": 685685,
+  "contractType": "Coalition",
+  "events": [
+    {
+      "name": "BuyerFunded",
+      "signature": "BuyerFunded(address,uint256,uint256)",
+      "fields": [
+        "buyer",
+        "amount",
+        "fundedCount"
+      ]
+    },
+    {
+      "name": "CoalitionCommitted",
+      "signature": "CoalitionCommitted(uint256)",
+      "fields": [
+        "totalPaid"
+      ]
+    },
+    {
+      "name": "CoalitionRefunded",
+      "signature": "CoalitionRefunded(uint256)",
+      "fields": [
+        "refundCount"
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "name": "commit-on-threshold",
+      "when": "funded_count == requiredBuyers && now <= validUntil && state == Funded",
+      "call": "commit()"
+    },
+    {
+      "name": "refund-on-expiry",
+      "when": "now > validUntil && (state == Forming || state == Funded)",
+      "call": "refundAll()"
+    }
+  ]
+}
