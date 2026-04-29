@@ -12,7 +12,10 @@ const genAI = new GoogleGenerativeAI(GOOGLE_AI_API_KEY);
 
 
 // In-memory mappings for the hackathon prototype
-const users: Record<number, { address: string; pk: string }> = {};
+const AVAILABLE_PORTS = [3001, 3002, 3003]; // Buyer 1, Buyer 2, Buyer 3 daemons
+let nextAgentIndex = 0;
+
+const users: Record<number, { address: string; pk: string; agentPort: number }> = {};
 
 // Keep track of the last status to only notify when things change
 // Map: chat_id -> commitment -> lastStatus
@@ -35,16 +38,22 @@ bot.onText(/\/start/, (msg) => {
   if (!users[chatId]) {
     const pk = generatePrivateKey();
     const account = privateKeyToAccount(pk);
+    
+    // Assign a rotating agent port (3001, 3002, 3003) to each new user
+    const agentPort = AVAILABLE_PORTS[nextAgentIndex % AVAILABLE_PORTS.length];
+    nextAgentIndex++;
+
     users[chatId] = {
       address: account.address,
       pk,
+      agentPort,
     };
   }
 
-  const { address } = users[chatId];
+  const { address, agentPort } = users[chatId];
   bot.sendMessage(
     chatId,
-    `Welcome to Huddle! Here is your Agent Wallet: \`${address}\`\n\nPlease deposit Gensyn Testnet ETH and MockUSDC. You can also use /faucet to get test funds automatically.`,
+    `Welcome to Huddle!\n\n💳 Wallet: \`${address}\`\n🔌 Node: \`localhost:${agentPort}\`\n\nPlease deposit Gensyn Testnet ETH and MockUSDC. You can also use /faucet to get test funds automatically.`,
     { parse_mode: "Markdown" }
   );
 });
@@ -77,7 +86,7 @@ bot.on("message", async (msg) => {
   let sku, maxPrice, qty;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
 
     const prompt = `You are an intent parser. Extract the SKU (product name), max price, and quantity from the following user message. Return ONLY a valid JSON object with the keys "sku", "maxPrice", and "qty", and absolutely no markdown formatting, text, or backticks around it. If values are missing or invalid, do your best to infer or return a clear error in JSON.
     Message: "${text}"`;
@@ -111,11 +120,12 @@ bot.on("message", async (msg) => {
 
   bot.sendMessage(
     chatId,
-    `Understood! Submitting Intent:\n📦 SKU: ${sku}\n💰 Max Price: $${maxPrice}\n🔢 Qty: ${qty}\n\nBroadcasting to the AXL mesh...`
+    `Understood! Submitting Intent:\n📦 SKU: ${sku}\n💰 Max Price: $${maxPrice}\n🔢 Qty: ${qty}\n\nBroadcasting from Agent Node (Port ${users[chatId]?.agentPort || 3001}) to the AXL mesh...`
   );
 
   try {
-    const res = await fetch(`${AGENT_API}/submit`, {
+    const userAgentUrl = `http://127.0.0.1:${users[chatId]?.agentPort || 3001}`;
+    const res = await fetch(`${userAgentUrl}/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(intent),
@@ -134,23 +144,24 @@ bot.on("message", async (msg) => {
   }
 });
 
-// Polling loop for local Agent daemon
+// Polling loop for local Agent daemons
 setInterval(async () => {
-  try {
-    const res = await fetch(`${AGENT_API}/status`);
-    if (!res.ok) return;
-
-    const data = await res.json();
-    const commits = data.myCommits || [];
-
-    // For hackathon simplicity, we assume there's only 1 Telegram user running 
-    // against this local agent instance at a time (e.g. Chat ID logic maps 1:1, but here we just loop known users).
-    // Or we could just notify all users that have submitted an intent. Let's iterate users actively tracking.
+    // For hackathon simplicity, we iterate over all active users and poll their specific agent port
     for (const chatIdStr of Object.keys(lastStatusMap)) {
       const chatId = Number(chatIdStr);
       const userTracked = lastStatusMap[chatId];
+      const user = users[chatId];
+      
+      if (!user) continue;
 
-      for (const commit of commits) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${user.agentPort}/status`);
+        if (!res.ok) continue;
+
+        const data = await res.json();
+        const commits = data.myCommits || [];
+        
+        for (const commit of commits) {
         const {
           commitment,
           sku,
@@ -194,8 +205,8 @@ setInterval(async () => {
           }
         }
       }
+    } catch (e) {
+      // Ignore fetch errors if a specific agent daemon isn't booted up yet
     }
-  } catch (e) {
-    // Ignore fetch errors (agent might be down)
   }
 }, 5000);
