@@ -1,3 +1,4 @@
+import { GossipSub, DEFAULT_GOSSIP_CONFIG } from "./gossipsub.js";
 import { AxlClient } from "./axl.js";
 
 // Tier price card. Real-world shape: vast.ai / coreweave / RunPod reservation tiers.
@@ -54,6 +55,7 @@ export type NegotiateResponse = {
 
 export class SellerAgent {
   private myPeerId = "";
+  private gossip!: GossipSub;
 
   constructor(
     private readonly axl: AxlClient,
@@ -64,24 +66,54 @@ export class SellerAgent {
   async init(): Promise<void> {
     const t = await this.axl.topology();
     this.myPeerId = t.our_public_key;
+    
+    this.gossip = new GossipSub(
+      DEFAULT_GOSSIP_CONFIG,
+      this.myPeerId,
+      async (dest: string, data: string) => {
+        try { await this.axl.send(dest, data); } catch (e) {}
+      },
+      async (topic: string, data: Buffer) => {
+        if (topic === "huddle") {
+          await this.handleEnvelopeBuffer(data, "gossip");
+        }
+      }
+    );
+    this.gossip.subscribe("huddle");
+
     this.log(`seller init: pubkey=${this.myPeerId}`);
     const skus = Object.keys(TIER_CARD).join(", ");
     this.log(`seller offers SKUs: ${skus}`);
   }
 
   async runOnce(): Promise<boolean> {
+    if (this.gossip) {
+      const t = await this.axl.topology();
+      for (const p of t.tree.map((n) => n.public_key)) this.gossip.add_peer(p);
+      this.gossip.tick();
+    }
+
     const m = await this.axl.recv();
     if (!m) return false;
 
+    if (this.gossip) {
+      const isGossip = await this.gossip.handle_raw(m.from, m.body);
+      if (isGossip) return true;
+    }
+
+    return this.handleEnvelopeBuffer(m.body, m.from);
+  }
+
+  private async handleEnvelopeBuffer(body: Buffer, transportFrom: string): Promise<boolean> {
     let env: NegotiateRequest;
     try {
-      env = JSON.parse(m.body.toString("utf8")) as NegotiateRequest;
+      env = JSON.parse(body.toString("utf8")) as NegotiateRequest;
     } catch {
       return true;
     }
     if (env.v !== 1 || env.kind !== "negotiate_request") return true;
     if (typeof env.from !== "string" || env.from.length !== 64) return true;
-    if (!env.from.startsWith(m.from.slice(0, 28))) {
+    if (transportFrom !== "gossip" && !env.from.startsWith(transportFrom.slice(0, 28))) {
       this.log(`drop spoofed negotiate_request`);
       return true;
     }
@@ -134,11 +166,16 @@ export class SellerAgent {
       };
     }
 
-    try {
-      await this.axl.send(req.from, JSON.stringify(resp));
-      this.log(`  -> response to ${short(req.from)}`);
-    } catch (e) {
-      this.log(`  ! response failed: ${(e as Error).message}`);
+    if (this.gossip) {
+      await this.gossip.publish("huddle", Buffer.from(JSON.stringify(resp)));
+      this.log(`  -> negotiate_resp published via GossipSub`);
+    } else {
+      try {
+        await this.axl.send(req.from, JSON.stringify(resp));
+        this.log(`  -> response to ${short(req.from)}`);
+      } catch (e) {
+        this.log(`  ! response failed: ${(e as Error).message}`);
+      }
     }
   }
 }

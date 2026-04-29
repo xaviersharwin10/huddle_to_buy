@@ -1,3 +1,4 @@
+import { GossipSub, DEFAULT_GOSSIP_CONFIG } from "./gossipsub.js";
 import { AxlClient } from "./axl.js";
 import type {
   CoalitionReadyEnv,
@@ -49,6 +50,7 @@ export type HuddleAgentOptions = {
 
 export class HuddleAgent {
   private observer: IntentObserver;
+  private gossip!: GossipSub;
   private myCommits = new Map<string, { intent: Intent; nonce: string }>();
   private clusters = new Map<string, ClusterState>();
   private revealsInitiated = new Set<string>();
@@ -88,6 +90,21 @@ export class HuddleAgent {
     const t = await this.axl.topology();
     this.myPeerId = t.our_public_key;
     this.log(`agent init: pubkey=${short(this.myPeerId)}${this.sellerPeerId ? `  seller=${short(this.sellerPeerId)}` : ""}`);
+
+    this.gossip = new GossipSub(
+      DEFAULT_GOSSIP_CONFIG,
+      this.myPeerId,
+      async (dest: string, data: string) => {
+        try { await this.axl.send(dest, data); } catch (e) {}
+      },
+      async (topic: string, data: Buffer) => {
+        if (topic === "huddle") {
+          await this.handleEnvelopeBuffer(data, "gossip");
+        }
+      }
+    );
+    this.gossip.subscribe("huddle");
+    
     if (this.onchain) {
       this.log(
         `onchain: enabled chain=${this.onchain.chainId} factory=${shortAddr(this.onchain.factoryAddress)} token=${shortAddr(this.onchain.payTokenAddress)}`,
@@ -151,29 +168,50 @@ export class HuddleAgent {
     this.observer.observe(c, this.myPeerId);
     this.log(`submit ${JSON.stringify(intent)}  c=${short(c)}`);
 
-    const peers = await this.broadcastPeers();
     const env: CommitEnv = { v: 1, kind: "commit", from: this.myPeerId, commitment: c };
-    const body = JSON.stringify(env);
-    for (const p of peers) {
-      try {
-        await this.axl.send(p, body);
-        this.log(`  -> commit to ${short(p)}`);
-      } catch (e) {
-        this.log(`  ! commit to ${short(p)} failed: ${(e as Error).message}`);
+    const body = Buffer.from(JSON.stringify(env));
+    
+    if (this.gossip) {
+       await this.gossip.publish("huddle", body);
+       this.log(`  -> commit published via GossipSub to c=${short(c)}`);
+    } else {
+      const peers = await this.broadcastPeers();
+      for (const p of peers) {
+        try {
+          await this.axl.send(p, JSON.stringify(env));
+          this.log(`  -> commit to ${short(p)}`);
+        } catch (e) {
+          this.log(`  ! commit to ${short(p)} failed: ${(e as Error).message}`);
+        }
       }
     }
     return c;
   }
 
   async runOnce(): Promise<boolean> {
+    if (this.gossip) {
+       const peers = await this.broadcastPeers();
+       for (const p of peers) this.gossip.add_peer(p);
+       this.gossip.tick();
+    }
+
     const m = await this.axl.recv();
     if (!m) return false;
 
+    if (this.gossip) {
+      const isGossip = await this.gossip.handle_raw(m.from, m.body);
+      if (isGossip) return true;
+    }
+
+    return this.handleEnvelopeBuffer(m.body, m.from);
+  }
+
+  private async handleEnvelopeBuffer(body: Buffer, transportFrom: string): Promise<boolean> {
     let env: Envelope;
     try {
-      env = JSON.parse(m.body.toString("utf8")) as Envelope;
+      env = JSON.parse(body.toString("utf8")) as Envelope;
     } catch {
-      this.log(`drop non-json from ${short(m.from)}`);
+      this.log(`drop non-json from ${short(transportFrom)}`);
       return true;
     }
     if (env.v !== 1) return true;
@@ -181,8 +219,9 @@ export class HuddleAgent {
       this.log(`drop bad-from envelope`);
       return true;
     }
-    if (!env.from.startsWith(m.from.slice(0, 28))) {
-      this.log(`drop spoofed envelope (claim=${short(env.from)} transport=${short(m.from)})`);
+    // We can't spoof-check gossip messages easily via transportFrom if they hopped through others.
+    if (transportFrom !== "gossip" && !env.from.startsWith(transportFrom.slice(0, 28))) {
+      this.log(`drop spoofed envelope (claim=${short(env.from)} transport=${short(transportFrom)})`);
       return true;
     }
 
@@ -222,10 +261,16 @@ export class HuddleAgent {
       v: 1, kind: "reveal_request", from: this.myPeerId,
       commitment: c, intent: my.intent, nonce: my.nonce,
     };
-    const body = JSON.stringify(env);
-    for (const p of peers) {
-      try { await this.axl.send(p, body); this.log(`  -> reveal_req to ${short(p)}`); }
-      catch (e) { this.log(`  ! reveal_req to ${short(p)} failed: ${(e as Error).message}`); }
+    
+    if (this.gossip) {
+      await this.gossip.publish("huddle", Buffer.from(JSON.stringify(env)));
+      this.log(`  -> reveal_req published via GossipSub`);
+    } else {
+      const body = JSON.stringify(env);
+      for (const p of peers) {
+        try { await this.axl.send(p, body); this.log(`  -> reveal_req to ${short(p)}`); }
+        catch (e) { this.log(`  ! reveal_req to ${short(p)} failed: ${(e as Error).message}`); }
+      }
     }
     await this.maybeFinalize(c);
   }
@@ -247,8 +292,14 @@ export class HuddleAgent {
         v: 1, kind: "reveal_response", from: this.myPeerId,
         commitment: env.commitment, intent: my.intent, nonce: my.nonce,
       };
-      try { await this.axl.send(env.from, JSON.stringify(resp)); this.log(`  -> reveal_resp to ${short(env.from)}`); }
-      catch (e) { this.log(`  ! reveal_resp to ${short(env.from)} failed: ${(e as Error).message}`); }
+      
+      if (this.gossip) {
+        await this.gossip.publish("huddle", Buffer.from(JSON.stringify(resp)));
+        this.log(`  -> reveal_resp published via GossipSub`);
+      } else {
+        try { await this.axl.send(env.from, JSON.stringify(resp)); this.log(`  -> reveal_resp to ${short(env.from)}`); }
+        catch (e) { this.log(`  ! reveal_resp to ${short(env.from)} failed: ${(e as Error).message}`); }
+      }
     }
     await this.maybeFinalize(env.commitment);
   }
@@ -304,8 +355,14 @@ export class HuddleAgent {
       max_unit_price: sample.max_unit_price,
     };
     this.log(`coordinator: sending negotiate_request to seller ${short(this.sellerPeerId)} (n=${req.n_buyers}, max=$${req.max_unit_price})`);
-    try { await this.axl.send(this.sellerPeerId, JSON.stringify(req)); }
-    catch (e) { this.log(`  ! negotiate_request failed: ${(e as Error).message}`); }
+
+    if (this.gossip) {
+      await this.gossip.publish("huddle", Buffer.from(JSON.stringify(req)));
+      this.log(`  -> negotiate_req published via GossipSub`);
+    } else {
+      try { await this.axl.send(this.sellerPeerId, JSON.stringify(req)); }
+      catch (e) { this.log(`  ! negotiate_request failed: ${(e as Error).message}`); }
+    }
   }
 
   private async onNegotiateResponse(env: NegotiateRespEnv): Promise<void> {
@@ -365,13 +422,18 @@ export class HuddleAgent {
         chain_id: this.onchain.chainId,
       };
 
-      for (const peer of cluster.members.keys()) {
-        if (peer === this.myPeerId) continue;
-        try {
-          await this.axl.send(peer, JSON.stringify(ready));
-          this.log(`  -> coalition_ready to ${short(peer)}`);
-        } catch (e) {
-          this.log(`  ! coalition_ready to ${short(peer)} failed: ${(e as Error).message}`);
+      if (this.gossip) {
+        await this.gossip.publish("huddle", Buffer.from(JSON.stringify(ready)));
+        this.log(`  -> coalition_ready published via GossipSub to c=${short(env.commitment)}`);
+      } else {
+        for (const peer of cluster.members.keys()) {
+          if (peer === this.myPeerId) continue;
+          try {
+            await this.axl.send(peer, JSON.stringify(ready));
+            this.log(`  -> coalition_ready to ${short(peer)}`);
+          } catch (e) {
+            this.log(`  ! coalition_ready to ${short(peer)} failed: ${(e as Error).message}`);
+          }
         }
       }
 
