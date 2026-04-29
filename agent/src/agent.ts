@@ -357,6 +357,7 @@ export class HuddleAgent {
     this.log(`coordinator: sending negotiate_request to seller ${short(this.sellerPeerId)} (n=${req.n_buyers}, max=$${req.max_unit_price})`);
 
     if (this.gossip) {
+      try { await this.axl.send(this.sellerPeerId, JSON.stringify(req)); } catch(e) {}
       await this.gossip.publish("huddle", Buffer.from(JSON.stringify(req)));
       this.log(`  -> negotiate_req published via GossipSub`);
     } else {
