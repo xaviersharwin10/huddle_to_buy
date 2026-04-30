@@ -2,10 +2,12 @@ import { HuddleAgent } from "./agent.js";
 import { AxlClient } from "./axl.js";
 import type { Intent } from "./intent.js";
 import { SellerAgent } from "./seller.js";
+import { createSellerChainConfigFromEnv } from "./chain.js";
 
 const AXL = process.env.AXL_API ?? "http://127.0.0.1:9002";
 const K = Number(process.env.K ?? "3");
 const SELLER_PEER_ID = process.env.SELLER_PEER_ID ?? null;
+const SELLER_API     = process.env.SELLER_API ?? null;
 const AUTO_FUND = (process.env.AUTO_FUND ?? "true").toLowerCase() === "true";
 const FUND_DELAY_MS = Number(process.env.FUND_DELAY_MS ?? "0");
 const KNOWN_PEERS = (process.env.KNOWN_PEERS ?? "")
@@ -19,6 +21,8 @@ env:
   AXL_API           AXL local HTTP API (default http://127.0.0.1:9002)
   K                 k-anonymity threshold (default 3)
   SELLER_PEER_ID    seller's full pubkey (64 hex). Coordinator queries this peer for tier price.
+  SELLER_API        seller's X402 HTTP base URL (e.g. http://127.0.0.1:3004). Coordinator pays
+                    0.01 MockUSDC via X402 to get the tier price. Falls back to GossipSub if unset.
   KNOWN_PEERS       comma-separated full pubkeys to broadcast to. Overrides /topology.tree.
                     Use this when Yggdrasil tree convergence is incomplete (hub-spoke topologies).
   RPC_URL           EVM RPC for Day-5 coalition flow (e.g. Gensyn Testnet RPC)
@@ -66,6 +70,7 @@ async function main() {
       const agent = new HuddleAgent(axl, {
         k: K,
         sellerPeerId: SELLER_PEER_ID,
+        sellerApi: SELLER_API,
         knownPeers: KNOWN_PEERS.length > 0 ? KNOWN_PEERS : null,
         autoFund: AUTO_FUND,
         fundDelayMs: FUND_DELAY_MS,
@@ -154,31 +159,10 @@ async function main() {
       const seller = new SellerAgent(axl);
       await seller.init();
       console.log(`seller mode on AXL ${AXL}`);
-      
-      const http = await import("http");
-      const server = http.createServer((req, res) => {
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        if (req.method === "GET" && req.url === "/status") {
-           res.writeHead(200, { "Content-Type": "application/json" });
-           res.end(JSON.stringify({ axl: AXL, peerId: "", logs: getStreamLogs() })); 
-           return;
-        }
-        res.writeHead(404);
-        res.end();
-      });
 
-      server.on("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "EADDRINUSE") {
-          console.log(`WARNING: PORT ${process.env.PORT || 3001} already in use — UI polling disabled for seller. Set PORT env var.`);
-        } else {
-          console.log(`HTTP server error: ${err.message}`);
-        }
-      });
-
-      const port = process.env.PORT || 3001;
-      server.listen(port, () => {
-        console.log(`Seller UI backend listening on http://localhost:${port}`);
-      });
+      const sellerChainCfg = createSellerChainConfigFromEnv();
+      const port = Number(process.env.PORT || 3004);
+      seller.startHttpServer(port, sellerChainCfg);
 
       while (true) {
         const got = await seller.runOnce();

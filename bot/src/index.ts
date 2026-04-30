@@ -37,12 +37,16 @@ let nextAgentIndex = 0;
 
 const users: Record<number, { address: string; pk: string; agentPort: number }> = {};
 
-// Keep track of the last status to only notify when things change
 // Map: chat_id -> commitment -> lastStatus
 const lastStatusMap: Record<number, Record<string, string>> = {};
 
+// Queue for intents when agent daemon is not yet online
+type QueuedIntent = { intent: object; agentPort: number; sku: string; retries: number };
+const intentQueue: Record<number, QueuedIntent[]> = {};
+
+const QUEUE_TIMEOUT_RETRIES = 24; // 24 × 5s = 2 minutes
+
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, {
-  // If no token is provided, just run dry (won't actually connect to telegram)
   polling: TELEGRAM_BOT_TOKEN !== "mock_token",
 });
 
@@ -58,16 +62,11 @@ bot.onText(/\/start/, (msg) => {
   if (!users[chatId]) {
     const pk = generatePrivateKey();
     const account = privateKeyToAccount(pk);
-    
-    // Assign a rotating agent port (3001, 3002, 3003) to each new user
+
     const agentPort = AVAILABLE_PORTS[nextAgentIndex % AVAILABLE_PORTS.length];
     nextAgentIndex++;
 
-    users[chatId] = {
-      address: account.address,
-      pk,
-      agentPort,
-    };
+    users[chatId] = { address: account.address, pk, agentPort };
   }
 
   const { address, agentPort } = users[chatId];
@@ -88,30 +87,37 @@ bot.onText(/\/faucet/, async (msg) => {
   bot.sendMessage(chatId, `⏳ Requesting funds from Gensyn Testnet Faucet... Please wait.`);
 
   try {
-      // Send ETH
-      const ethTx = await walletClient.sendTransaction({
-        to: user.address as `0x${string}`,
-        value: parseEther("0.5")
-      });
+    const ethTx = await walletClient.sendTransaction({
+      to: user.address as `0x${string}`,
+      value: parseEther("0.001")
+    });
 
-      // Send USDC
-      const usdcTx = await walletClient.writeContract({
-        address: MOCK_USDC,
-        abi: erc20Abi,
-        functionName: 'transfer',
-        args: [user.address as `0x${string}`, parseUnits("10000", 6)] // MockUSDC has 6 decimals
-      });
+    const usdcTx = await walletClient.writeContract({
+      address: MOCK_USDC,
+      abi: erc20Abi,
+      functionName: 'transfer',
+      args: [user.address as `0x${string}`, parseUnits("100", 6)]
+    });
 
-      bot.sendMessage(
-        chatId,
-        `✅ **Faucet success!**\n\nDistributed 10,000 MockUSDC and 0.5 Gensyn Testnet ETH to \`${user.address}\`.\n\n🔗 [ETH Tx](https://explorer.gensyn-testnet.g.alchemy.com/tx/${ethTx})\n🔗 [USDC Tx](https://explorer.gensyn-testnet.g.alchemy.com/tx/${usdcTx})`,
-        { parse_mode: "Markdown", disable_web_page_preview: true }
-      );
+    bot.sendMessage(
+      chatId,
+      `✅ **Faucet success!**\n\nDistributed 100 MockUSDC and 0.001 Gensyn Testnet ETH to \`${user.address}\`.\n\n🔗 [ETH Tx](https://gensyn-testnet.explorer.alchemy.com/tx/${ethTx})\n🔗 [USDC Tx](https://gensyn-testnet.explorer.alchemy.com/tx/${usdcTx})`,
+      { parse_mode: "Markdown", disable_web_page_preview: true }
+    );
   } catch (error) {
-      console.error("Faucet Error:", error);
-      bot.sendMessage(chatId, `❌ Faucet failed: ${(error as Error).message}`);
+    console.error("Faucet Error:", error);
+    bot.sendMessage(chatId, `❌ Faucet failed: ${(error as Error).message}`);
   }
 });
+
+async function submitIntent(agentPort: number, intent: object): Promise<void> {
+  const res = await fetch(`http://127.0.0.1:${agentPort}/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(intent),
+  });
+  if (!res.ok) throw new Error(`Agent rejected intent: ${await res.text()}`);
+}
 
 // Natural Language Intent Parsing
 bot.on("message", async (msg) => {
@@ -124,12 +130,10 @@ bot.on("message", async (msg) => {
     return bot.sendMessage(chatId, "Google AI API key is missing. Please set GOOGLE_AI_API_KEY in the .env file.");
   }
 
-  let sku, maxPrice, qty;
+  let sku: string, maxPrice: number, qty: number;
 
   try {
-    // Try gemini-flash-latest
     const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-
     const prompt = `You are an intent parser. Extract the SKU (product name), max price, and quantity from the following user message. Return ONLY a valid JSON object with the keys "sku", "maxPrice", and "qty", and absolutely no markdown formatting, text, or backticks around it. If values are missing or invalid, do your best to infer or return a clear error in JSON.
     Message: "${text}"`;
 
@@ -146,7 +150,6 @@ bot.on("message", async (msg) => {
     }
   } catch (err) {
     console.error("Gemini Parsing Error, falling back to Regex:", err);
-    // Fallback regex parser for the hackathon demo
     const regex = /buy\s+([a-zA-Z0-9-]+).*?\$([0-9.]+).*?qty\s+([0-9]+)/i;
     const match = text.match(regex);
     if (match) {
@@ -162,102 +165,124 @@ bot.on("message", async (msg) => {
     }
   }
 
+  const agentPort = users[chatId]?.agentPort || 3001;
   const intent = {
-    sku: sku,
-    max_unit_price: maxPrice,
-    qty: qty,
-    deadline_ms: 24 * 60 * 60 * 1000 // 24 hours relative from now
+    sku: sku!,
+    max_unit_price: maxPrice!,
+    qty: qty!,
+    deadline_ms: 24 * 60 * 60 * 1000
   };
 
   bot.sendMessage(
     chatId,
-    `Understood! Submitting Intent:\n📦 SKU: ${sku}\n💰 Max Price: $${maxPrice}\n🔢 Qty: ${qty}\n\nBroadcasting from Agent Node (Port ${users[chatId]?.agentPort || 3001}) to the AXL mesh...`
+    `Understood! Submitting Intent:\n📦 SKU: ${sku!}\n💰 Max Price: $${maxPrice!}\n🔢 Qty: ${qty!}\n\nBroadcasting from Agent Node (Port ${agentPort}) to the AXL mesh...`
   );
 
   try {
-    const userAgentUrl = `http://127.0.0.1:${users[chatId]?.agentPort || 3001}`;
-    const res = await fetch(`${userAgentUrl}/submit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(intent),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Failed to submit intent: ${await res.text()}`);
-    }
-
-    if (!lastStatusMap[chatId]) {
-      lastStatusMap[chatId] = {};
-    }
+    await submitIntent(agentPort, intent);
+    if (!lastStatusMap[chatId]) lastStatusMap[chatId] = {};
   } catch (error) {
-    console.error(error);
-    bot.sendMessage(chatId, `❌ Error submitting intent: ${(error as Error).message}`);
+    const errMsg = (error as Error).message;
+    const isOffline = errMsg.includes("ECONNREFUSED") || errMsg.includes("fetch failed");
+
+    if (isOffline) {
+      if (!intentQueue[chatId]) intentQueue[chatId] = [];
+      intentQueue[chatId].push({ intent, agentPort, sku: sku!, retries: 0 });
+      if (!lastStatusMap[chatId]) lastStatusMap[chatId] = {};
+      bot.sendMessage(
+        chatId,
+        `⏳ Agent node is not running yet. Your intent for **${sku!}** is queued and will broadcast automatically once the node comes online.`,
+        { parse_mode: "Markdown" }
+      );
+    } else {
+      console.error("Intent submission error:", error);
+      bot.sendMessage(chatId, `❌ Error submitting intent: ${errMsg}`);
+    }
   }
 });
 
-// Polling loop for local Agent daemons
+// Polling loop — processes queued intents + tracks coalition status
 setInterval(async () => {
-    // For hackathon simplicity, we iterate over all active users and poll their specific agent port
-    for (const chatIdStr of Object.keys(lastStatusMap)) {
-      const chatId = Number(chatIdStr);
-      const userTracked = lastStatusMap[chatId];
-      const user = users[chatId];
-      
-      if (!user) continue;
+  // Retry queued intents for users whose agent was offline
+  for (const chatIdStr of Object.keys(intentQueue)) {
+    const chatId = Number(chatIdStr);
+    const queue = intentQueue[chatId];
+    if (!queue || queue.length === 0) { delete intentQueue[chatId]; continue; }
 
-      try {
-        const res = await fetch(`http://127.0.0.1:${user.agentPort}/status`);
-        if (!res.ok) continue;
+    const item = queue[0];
+    try {
+      await submitIntent(item.agentPort, item.intent);
+      queue.shift();
+      if (queue.length === 0) delete intentQueue[chatId];
+      bot.sendMessage(
+        chatId,
+        `✅ Agent is online! Intent for **${item.sku}** is now live on the AXL mesh.`,
+        { parse_mode: "Markdown" }
+      );
+    } catch {
+      item.retries++;
+      if (item.retries >= QUEUE_TIMEOUT_RETRIES) {
+        queue.shift();
+        if (queue.length === 0) delete intentQueue[chatId];
+        bot.sendMessage(
+          chatId,
+          `❌ Could not reach the agent node after 2 minutes. Please start the Huddle agent and send your intent again.`
+        );
+      }
+    }
+  }
 
-        const data = await res.json();
-        const commits = data.myCommits || [];
-        
-        for (const commit of commits) {
-        const {
-          commitment,
-          sku,
-          qty,
-          max_unit_price,
-          statusStr,
-          clusterSize,
-          offer,
-          address
-        } = commit;
+  // Track coalition status changes
+  for (const chatIdStr of Object.keys(lastStatusMap)) {
+    const chatId = Number(chatIdStr);
+    const userTracked = lastStatusMap[chatId];
+    const user = users[chatId];
+
+    if (!user) continue;
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${user.agentPort}/status`);
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const commits = data.myCommits || [];
+
+      for (const commit of commits) {
+        const { commitment, sku, qty, max_unit_price, statusStr, clusterSize, offer, address } = commit;
         const prevStatus = userTracked[commitment] || "";
 
         if (prevStatus !== statusStr) {
           userTracked[commitment] = statusStr;
 
           if (statusStr === "Broadcasting Intent") {
-             // Let UI handle it natively
+            // Let UI handle it natively
           } else if (statusStr === "Negotiating Tier Price") {
-             bot.sendMessage(chatId, `🤖 I found ${clusterSize} peers on the AXL mesh! Forming a coalition...`);
+            bot.sendMessage(chatId, `🤖 I found ${clusterSize} peers on the AXL mesh! Forming a coalition...`);
           } else if (statusStr === "Tier Offer Received") {
-             bot.sendMessage(
-                 chatId, 
-                 `🗣️ I am negotiating with the seller...\nThey offered $${offer.tierUnitPrice} / unit (valid until ${new Date(offer.validUntilMs).toLocaleTimeString()})!`
-             );
+            bot.sendMessage(
+              chatId,
+              `🗣️ I am negotiating with the seller...\nThey offered $${offer.tierUnitPrice} / unit (valid until ${new Date(offer.validUntilMs).toLocaleTimeString()})!`
+            );
           } else if (statusStr === "Deploying Coalition") {
-             bot.sendMessage(
-                 chatId, 
-                 `💸 Offer accepted! Contract deployed at \`${address}\`.\nI am autonomously signing the transaction to pool your funds...`,
-                 { parse_mode: "Markdown" }
-             );
+            bot.sendMessage(
+              chatId,
+              `💸 Offer accepted! Contract deployed at \`${address}\`.\nI am autonomously signing the transaction to pool your funds...`,
+              { parse_mode: "Markdown" }
+            );
           } else if (statusStr === "Settled (commit ready)") {
-             const discount = max_unit_price - (offer?.tierUnitPrice || max_unit_price);
-             const totalSaved = discount * qty;
-             const originalTotal = qty * max_unit_price;
+            const discount = max_unit_price - (offer?.tierUnitPrice || max_unit_price);
+            const totalSaved = discount * qty;
 
-             bot.sendMessage(
-                 chatId,
-                 `✅ **Purchase Complete!**\n\nItem: ${sku} (Qty: ${qty})\nOriginal Price Target: $${max_unit_price.toFixed(2)}\nBulk Discount Achieved: $${offer?.tierUnitPrice?.toFixed(2) || "N/A"}\nTotal Saved: $${totalSaved.toFixed(2)}\n\n🔗 Gensyn Testnet Tx: [View on Explorer](https://explorer.gensyn-testnet.g.alchemy.com/address/${address})`,
-                 { parse_mode: "Markdown", disable_web_page_preview: true }
-             );
+            bot.sendMessage(
+              chatId,
+              `✅ **Purchase Complete!**\n\nItem: ${sku} (Qty: ${qty})\nOriginal Price Target: $${max_unit_price.toFixed(2)}\nBulk Discount Achieved: $${offer?.tierUnitPrice?.toFixed(2) || "N/A"}\nTotal Saved: $${totalSaved.toFixed(2)}\n\n🔗 Gensyn Testnet Tx: [View on Explorer](https://gensyn-testnet.explorer.alchemy.com/address/${address})`,
+              { parse_mode: "Markdown", disable_web_page_preview: true }
+            );
           }
         }
       }
-    } catch (e) {
-      // Ignore fetch errors if a specific agent daemon isn't booted up yet
+    } catch {
+      // Agent daemon not running yet — silently skip
     }
   }
 }, 5000);

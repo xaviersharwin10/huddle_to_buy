@@ -1,3 +1,9 @@
+import { createServer } from "http";
+import {
+  verifyQuotePayment,
+  QUOTE_FEE_UNITS,
+  type SellerChainConfig,
+} from "./chain.js";
 import { GossipSub, DEFAULT_GOSSIP_CONFIG } from "./gossipsub.js";
 import { AxlClient } from "./axl.js";
 
@@ -56,6 +62,7 @@ export type NegotiateResponse = {
 export class SellerAgent {
   private myPeerId = "";
   private gossip!: GossipSub;
+  private usedPayments = new Set<string>();
 
   constructor(
     private readonly axl: AxlClient,
@@ -177,6 +184,149 @@ export class SellerAgent {
         this.log(`  ! response failed: ${(e as Error).message}`);
       }
     }
+  }
+}
+
+  /**
+   * Starts the combined status + X402 quote HTTP server.
+   * GET /health        → 200 {ok, peerId}
+   * GET /status        → 200 {logs, peerId}
+   * GET /quote?...     → 402 payment-required  OR  200 {tier_unit_price, ...}
+   *
+   * X402 flow:
+   *   1. Client calls /quote without X-Payment → gets 402 + payment details.
+   *   2. Client sends 0.01 MockUSDC to sellerAddress on-chain.
+   *   3. Client retries with header: X-Payment: base64(JSON{txHash}).
+   *   4. Seller verifies Transfer event on-chain → returns tier price.
+   */
+  startHttpServer(port: number, cfg: SellerChainConfig | null): void {
+    const server = createServer(async (req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Content-Type", "application/json");
+
+      if (req.method === "OPTIONS") { res.writeHead(200); res.end(); return; }
+
+      const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+
+      if (url.pathname === "/health") {
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true, peerId: this.myPeerId }));
+        return;
+      }
+
+      if (url.pathname === "/status") {
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true, peerId: this.myPeerId }));
+        return;
+      }
+
+      if (url.pathname !== "/quote") {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+
+      const sku          = url.searchParams.get("sku") ?? "";
+      const nBuyers      = parseInt(url.searchParams.get("n_buyers") ?? "0");
+      const unitQty      = parseInt(url.searchParams.get("unit_qty") ?? "0");
+      const maxUnitPrice = parseFloat(url.searchParams.get("max_unit_price") ?? "0");
+
+      if (!sku || !nBuyers || !unitQty || !maxUnitPrice) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: "missing params: sku, n_buyers, unit_qty, max_unit_price" }));
+        return;
+      }
+
+      if (!cfg) {
+        res.writeHead(503);
+        res.end(JSON.stringify({ error: "seller not configured for X402 (set RPC_URL, PAY_TOKEN_ADDRESS, SELLER_ADDRESS)" }));
+        return;
+      }
+
+      const xPaymentHeader = req.headers["x-payment"] as string | undefined;
+
+      if (!xPaymentHeader) {
+        // ── Step 1: respond 402 with payment requirements ──────────────────
+        const body = {
+          x402Version: 1,
+          error: "Payment required for price quote",
+          accepts: [{
+            scheme: "exact",
+            network: `gensyn-testnet-${685685}`,
+            maxAmountRequired: QUOTE_FEE_UNITS.toString(),
+            asset: cfg.payTokenAddress,
+            payTo: cfg.sellerAddress,
+            resource: "/quote",
+            description: `Quote fee: 0.01 MockUSDC for ${sku} (${nBuyers} buyers)`,
+          }],
+        };
+        res.writeHead(402);
+        res.end(JSON.stringify(body));
+        this.log(`x402: 402 → /quote sku=${sku} n=${nBuyers}`);
+        return;
+      }
+
+      // ── Step 2: verify payment ──────────────────────────────────────────
+      let txHash: `0x${string}`;
+      try {
+        const decoded = JSON.parse(Buffer.from(xPaymentHeader, "base64").toString("utf8"));
+        txHash = decoded?.payload?.txHash;
+        if (!txHash || !txHash.startsWith("0x")) throw new Error("missing txHash");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: `invalid X-Payment header: ${(e as Error).message}` }));
+        return;
+      }
+
+      if (this.usedPayments.has(txHash)) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: "payment already used" }));
+        return;
+      }
+
+      const valid = await verifyQuotePayment({ cfg, txHash, minAmount: QUOTE_FEE_UNITS });
+      if (!valid) {
+        res.writeHead(402);
+        res.end(JSON.stringify({ error: "on-chain payment verification failed" }));
+        this.log(`x402: payment INVALID txHash=${txHash.slice(0, 10)}…`);
+        return;
+      }
+
+      this.usedPayments.add(txHash);
+
+      // ── Step 3: return tier price ───────────────────────────────────────
+      const tierPrice = pickTierPrice(sku, nBuyers);
+      if (tierPrice == null) {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: "sku_not_offered" }));
+        this.log(`x402: /quote sku=${sku} — DECLINE sku_not_offered [payment ok]`);
+        return;
+      }
+
+      const validUntilMs = Date.now() + this.offerValidForMs;
+      if (tierPrice > maxUnitPrice) {
+        res.writeHead(200);
+        res.end(JSON.stringify({ decline_reason: "tier_above_max", tier_unit_price: tierPrice, max_unit_price: maxUnitPrice }));
+        this.log(`x402: /quote sku=${sku} n=${nBuyers} — DECLINE tier $${tierPrice} > max $${maxUnitPrice} [payment ok]`);
+        return;
+      }
+
+      res.writeHead(200);
+      res.end(JSON.stringify({ tier_unit_price: tierPrice, valid_until_ms: validUntilMs, sku, n_buyers: nBuyers, unit_qty: unitQty }));
+      this.log(`x402: /quote sku=${sku} n=${nBuyers} — OFFER $${tierPrice}/unit [txHash=${txHash.slice(0, 10)}…]`);
+    });
+
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        this.log(`WARNING: port ${port} already in use — X402 server not started`);
+      } else {
+        this.log(`X402 server error: ${err.message}`);
+      }
+    });
+
+    server.listen(port, () => {
+      this.log(`x402: seller quote server on http://localhost:${port}/quote`);
+    });
   }
 }
 

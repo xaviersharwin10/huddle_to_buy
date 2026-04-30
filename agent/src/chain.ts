@@ -95,6 +95,16 @@ const ERC20_ABI = [
     ],
     outputs: [{ name: "", type: "bool" }],
   },
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "recipient", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
 ] as const;
 
 const BUYER_PROFILE_ABI = [
@@ -346,6 +356,90 @@ export async function mintBuyerProfile0G(
   });
   await publicClient.waitForTransactionReceipt({ hash });
   return hash;
+}
+
+// ── X402 quote-fee helpers ─────────────────────────────────────────────────
+
+/** 0.01 MockUSDC (6 decimals) charged per price-quote request. */
+export const QUOTE_FEE_UNITS = 10_000n;
+
+/** Minimal chain config the seller needs to verify quote payments. */
+export type SellerChainConfig = {
+  rpcUrl: string;
+  payTokenAddress: `0x${string}`;
+  sellerAddress: `0x${string}`;
+};
+
+export function createSellerChainConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): SellerChainConfig | null {
+  const rpcUrl = env.RPC_URL ?? "";
+  const payTokenAddress = env.PAY_TOKEN_ADDRESS ?? "";
+  const sellerAddress = env.SELLER_ADDRESS ?? "";
+  if (!rpcUrl || !payTokenAddress || !sellerAddress) return null;
+  return {
+    rpcUrl,
+    payTokenAddress: normalizeHex(payTokenAddress),
+    sellerAddress: normalizeHex(sellerAddress),
+  };
+}
+
+/**
+ * Coordinator sends 0.01 MockUSDC to the seller treasury to unlock a price
+ * quote. Uses the buyer's OnchainConfig (private key + token address).
+ */
+export async function sendQuotePayment(args: {
+  cfg: OnchainConfig;
+  recipientAddress: `0x${string}`;
+}): Promise<`0x${string}`> {
+  const { cfg, recipientAddress } = args;
+  const account = privateKeyToAccount(cfg.privateKey);
+  const wallet = createWalletClient({ account, chain: gensynTestnet, transport: http(cfg.rpcUrl) });
+  const publicClient = createPublicClient({ chain: gensynTestnet, transport: http(cfg.rpcUrl) });
+
+  const hash = await wallet.writeContract({
+    address: cfg.payTokenAddress,
+    abi: ERC20_ABI,
+    functionName: "transfer",
+    args: [recipientAddress, QUOTE_FEE_UNITS],
+    gas: 100_000n,
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return hash;
+}
+
+const TRANSFER_TOPIC =
+  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+/**
+ * Seller calls this to confirm an X402 payment landed on-chain.
+ * Scans Transfer event logs in the receipt; returns true iff a transfer to
+ * sellerAddress of at least minAmount exists.
+ */
+export async function verifyQuotePayment(args: {
+  cfg: SellerChainConfig;
+  txHash: `0x${string}`;
+  minAmount: bigint;
+}): Promise<boolean> {
+  const { cfg, txHash, minAmount } = args;
+  const publicClient = createPublicClient({ chain: gensynTestnet, transport: http(cfg.rpcUrl) });
+
+  let receipt;
+  try {
+    receipt = await publicClient.getTransactionReceipt({ hash: txHash });
+  } catch {
+    return false;
+  }
+
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== cfg.payTokenAddress.toLowerCase()) continue;
+    if (log.topics[0]?.toLowerCase() !== TRANSFER_TOPIC) continue;
+    if (!log.topics[2]) continue;
+    const toAddr = `0x${log.topics[2].slice(-40)}`.toLowerCase();
+    if (toAddr !== cfg.sellerAddress.toLowerCase()) continue;
+    if (BigInt(log.data) >= minAmount) return true;
+  }
+  return false;
 }
 
 function normalizeHex(s: string): `0x${string}` {

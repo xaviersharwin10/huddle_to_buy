@@ -15,6 +15,7 @@ import {
   deployCoalition,
   fundCoalitionForBuyer,
   mintBuyerProfile0G,
+  sendQuotePayment,
   toTokenUnits,
   type OnchainConfig,
   type ZeroGProfileConfig,
@@ -40,6 +41,8 @@ type Logger = (s: string) => void;
 export type HuddleAgentOptions = {
   k?: number;
   sellerPeerId?: string | null;
+  /** HTTP base URL of the seller's X402 quote server (e.g. http://127.0.0.1:3004). */
+  sellerApi?: string | null;
   /** Optional override for broadcast peers. If null, falls back to /topology.tree. */
   knownPeers?: string[] | null;
   onchain?: OnchainConfig | null;
@@ -58,6 +61,7 @@ export class HuddleAgent {
 
   private readonly k: number;
   private readonly sellerPeerId: string | null;
+  private readonly sellerApi: string | null;
   private readonly knownPeers: string[] | null;
   private readonly onchain: OnchainConfig | null;
   private readonly zeroGProfile: ZeroGProfileConfig | null;
@@ -68,6 +72,7 @@ export class HuddleAgent {
   constructor(private readonly axl: AxlClient, opts: HuddleAgentOptions = {}) {
     this.k = opts.k ?? 3;
     this.sellerPeerId = opts.sellerPeerId ?? null;
+    this.sellerApi = opts.sellerApi ?? null;
     this.knownPeers = opts.knownPeers ?? null;
     this.onchain = opts.onchain ?? createOnchainConfigFromEnv();
     this.zeroGProfile = createZeroGProfileConfigFromEnv();
@@ -335,14 +340,22 @@ export class HuddleAgent {
 
   private async tryNegotiate(c: string): Promise<void> {
     const cluster = this.clusters.get(c)!;
-    if (cluster.negotiateSent || !this.sellerPeerId) {
-      if (!this.sellerPeerId) this.log(`(no SELLER_PEER_ID set — skipping negotiate)`);
+    if (cluster.negotiateSent || (!this.sellerPeerId && !this.sellerApi)) {
+      if (!this.sellerPeerId && !this.sellerApi)
+        this.log(`(no SELLER_PEER_ID/SELLER_API set — skipping negotiate)`);
       return;
     }
     cluster.negotiateSent = true;
 
-    // All cluster members agreed on (sku, tier_bucket) per commitment hash. Use the
-    // first member's intent as canonical for sku + qty + max_unit_price.
+    // Try X402 HTTP first — pays 0.01 MockUSDC and gets tier price back directly.
+    if (this.sellerApi) {
+      const ok = await this.negotiateViaX402(c, this.sellerApi);
+      if (ok) return;
+      this.log(`x402: negotiation failed — falling back to GossipSub`);
+    }
+
+    // GossipSub fallback (original path).
+    if (!this.sellerPeerId) return;
     const sample = [...cluster.members.values()][0];
     const req: NegotiateReqEnv = {
       v: 1,
@@ -354,15 +367,109 @@ export class HuddleAgent {
       unit_qty: sample.qty,
       max_unit_price: sample.max_unit_price,
     };
-    this.log(`coordinator: sending negotiate_request to seller ${short(this.sellerPeerId)} (n=${req.n_buyers}, max=$${req.max_unit_price})`);
+    this.log(`coordinator: negotiate_request → seller ${short(this.sellerPeerId)} (n=${req.n_buyers}, max=$${req.max_unit_price})`);
 
     if (this.gossip) {
-      try { await this.axl.send(this.sellerPeerId, JSON.stringify(req)); } catch(e) {}
+      try { await this.axl.send(this.sellerPeerId, JSON.stringify(req)); } catch (_) {}
       await this.gossip.publish("huddle", Buffer.from(JSON.stringify(req)));
       this.log(`  -> negotiate_req published via GossipSub`);
     } else {
       try { await this.axl.send(this.sellerPeerId, JSON.stringify(req)); }
       catch (e) { this.log(`  ! negotiate_request failed: ${(e as Error).message}`); }
+    }
+  }
+
+  /**
+   * X402 negotiation: coordinator pays 0.01 MockUSDC to the seller's HTTP
+   * /quote endpoint, receives a tier price, and proceeds directly to coalition
+   * deployment — no GossipSub round-trip required.
+   */
+  private async negotiateViaX402(c: string, sellerApi: string): Promise<boolean> {
+    const cluster = this.clusters.get(c)!;
+    const sample = [...cluster.members.values()][0];
+
+    const params = new URLSearchParams({
+      sku: sample.sku,
+      n_buyers: String(cluster.members.size),
+      unit_qty: String(sample.qty),
+      max_unit_price: String(sample.max_unit_price),
+    });
+    const quoteUrl = `${sellerApi}/quote?${params}`;
+
+    try {
+      // ── Step 1: initial request → expect 402 ─────────────────────────────
+      this.log(`x402: GET ${quoteUrl}`);
+      const res1 = await fetch(quoteUrl);
+      if (res1.status !== 402) {
+        this.log(`x402: unexpected status ${res1.status} (expected 402)`);
+        return false;
+      }
+
+      const payReq = (await res1.json()) as any;
+      const accept = payReq?.accepts?.[0];
+      if (!accept?.payTo || !accept?.asset) {
+        this.log(`x402: malformed 402 response`);
+        return false;
+      }
+
+      if (!this.onchain) {
+        this.log(`x402: onchain disabled — cannot pay quote fee`);
+        return false;
+      }
+
+      // ── Step 2: pay the quote fee on-chain ───────────────────────────────
+      this.log(`x402: paying ${accept.maxAmountRequired} token units → ${accept.payTo}`);
+      const txHash = await sendQuotePayment({
+        cfg: this.onchain,
+        recipientAddress: accept.payTo as `0x${string}`,
+      });
+      this.log(`x402: payment confirmed txHash=${txHash}`);
+
+      // ── Step 3: retry with X-Payment proof ───────────────────────────────
+      const xPayment = Buffer.from(
+        JSON.stringify({ x402Version: 1, scheme: "exact", network: `gensyn-testnet-${this.onchain.chainId}`, payload: { txHash } }),
+      ).toString("base64");
+
+      const res2 = await fetch(quoteUrl, { headers: { "X-Payment": xPayment } });
+      if (!res2.ok) {
+        const body = await res2.text();
+        this.log(`x402: quote rejected after payment (${res2.status}): ${body}`);
+        return false;
+      }
+
+      const quote = (await res2.json()) as any;
+      if (quote.decline_reason) {
+        this.log(`x402: seller declined: ${quote.decline_reason}`);
+        return false;
+      }
+
+      const tierUnitPrice: number = quote.tier_unit_price;
+      const validUntilMs: number  = quote.valid_until_ms;
+      cluster.offer = { tierUnitPrice, validUntilMs };
+
+      const indivPrice = sample.max_unit_price;
+      const savedPerBuyer = (indivPrice - tierUnitPrice) * sample.qty;
+      const totalSaved    = savedPerBuyer * cluster.members.size;
+      const expiryS = Math.round((validUntilMs - Date.now()) / 1000);
+      this.log(`x402: OFFER $${tierUnitPrice}/unit × ${sample.qty} × ${cluster.members.size}; saved $${savedPerBuyer.toFixed(2)}/buyer ($${totalSaved.toFixed(2)} total); valid ${expiryS}s`);
+
+      // Synthesise a NegotiateRespEnv so the existing coalition-deploy path is reused.
+      const fakeResp: NegotiateRespEnv = {
+        v: 1,
+        kind: "negotiate_response",
+        from: this.sellerPeerId ?? "",
+        commitment: c,
+        sku: sample.sku,
+        n_buyers: cluster.members.size,
+        unit_qty: sample.qty,
+        tier_unit_price: tierUnitPrice,
+        valid_until_ms: validUntilMs,
+      };
+      await this.maybeDeployCoalition(fakeResp);
+      return true;
+    } catch (e) {
+      this.log(`x402: error — ${(e as Error).message}`);
+      return false;
     }
   }
 
