@@ -185,7 +185,6 @@ export class SellerAgent {
       }
     }
   }
-}
 
   /**
    * Starts the combined status + X402 quote HTTP server.
