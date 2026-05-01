@@ -12,7 +12,6 @@
 #
 # Usage (from repo root):
 #   bash scripts/boot-demo.sh             # start everything
-#   bash scripts/boot-demo.sh --no-ui     # skip web UI start
 #   bash scripts/boot-demo.sh --kill      # kill all first, then start
 #
 # Prerequisites:
@@ -21,7 +20,6 @@
 #   - contracts/.env must exist with PRIVATE_KEY and GENSYN_TESTNET_RPC
 #
 # After running:
-#   - Web UI: http://localhost:3000
 #   - Buyer 1 agent:  http://localhost:3001/status
 #   - Buyer 2 agent:  http://localhost:3002/status
 #   - Buyer 3 agent:  http://localhost:3003/status
@@ -36,12 +34,10 @@ LOGS="$ROOT/logs"
 
 mkdir -p "$LOGS"
 
-START_UI=true
 DO_KILL=false
 
 for arg in "$@"; do
   case "$arg" in
-    --no-ui)   START_UI=false ;;
     --kill)    DO_KILL=true   ;;
   esac
 done
@@ -154,26 +150,10 @@ done
 
 echo ""
 
-# ── 6. Optionally start Web UI ────────────────────────────────────────────────
-if $START_UI; then
-  WEB_LOG="$LOGS/web.log"
-  echo "[boot] Starting Next.js web UI (PORT=3000)..."
-  echo "--- Web UI starting at $(date -Iseconds) ---" >> "$WEB_LOG"
-  (
-    cd "$ROOT/web"
-    exec pnpm dev
-  ) >> "$WEB_LOG" 2>&1 &
-  disown
-  sleep 2
-  echo "  Web UI started → $WEB_LOG"
-  echo "  Open: http://localhost:3000"
-fi
-
 echo ""
 echo "╔════════════════════════════════════════════════╗"
 echo "║  Huddle demo stack is running!                ║"
 echo "╠════════════════════════════════════════════════╣"
-echo "║  Web UI      → http://localhost:3000           ║"
 echo "║  Buyer 1     → http://localhost:3001/status    ║"
 echo "║  Buyer 2     → http://localhost:3002/status    ║"
 echo "║  Buyer 3     → http://localhost:3003/status    ║"

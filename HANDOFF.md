@@ -26,7 +26,6 @@ We have fully migrated the entire stack to **Gensyn**.
 | **Networking** | ✅ Done | 4 local AXL mesh nodes boot successfully. Agents use `/send`, `/recv`, and `/topology` to broadcast Intents securely. |
 | **Contracts** | ✅ Done | `CoalitionFactory.sol`, `Coalition.sol`, and `MockUSDC.sol` are deployed on Gensyn Testnet (Chain ID 685685). 8/8 Hardhat tests pass. |
 | **Agent Logic** | ✅ Done | Gossip broadcasting, coordinator election, negotiation, and Viem-based contract funding are fully functional. |
-| **Web UI** | ✅ Done | Next.js dashboard visualizes the mesh, logs agent behavior, and triggers the Keeper. |
 | **KeeperHub** | ✅ Done | Two live cloud workflows registered on KeeperHub (`agfndtbs9xl7wlj9qa3ud` commit, `kt470bvmvs0aqyrtgi5ax` refund). UI trigger fetches real workflow status via KeeperHub API. |
 | **0G Agents/iNFT** | ✅ Done | BuyerProfile ERC-7857 deployed on 0G Galileo testnet. Each agent mints an iNFT on init, uploads prefs to 0G Storage, seals coalition outcome on-chain. 0G Compute (`qwen/qwen-2.5-7b-instruct` via TeeML-verified provider) makes accept/reject decisions. |
 | **Hackathon Readiness** | ✅ Done | Lockfiles are `.gitignore`d to prevent commit-size flags. |
@@ -75,22 +74,14 @@ We have heavily scripted the demo process. Run these commands from the root of t
 2. Run `pnpm install` in the root.
 3. If the AXL binary (`axl/bin/node`) is missing, you must clone `https://github.com/gensyn-ai/axl` into `axl/upstream` and run `make build`.
 
-### Step 1: Start the Web UI
-The UI gives you a visual representation of what the agents are doing.
-```bash
-cd web
-pnpm dev
-# Open http://localhost:3000
-```
-
-### Step 2: Run the "Happy Path" Demo
-This script is pure magic. It automatically boots 4 AXL mesh nodes, starts the Seller agent, starts 3 Buyer agents, allows them to negotiate, deploys the smart contract, funds it, and executes the Keeper.
+### Step 1: Run the "Happy Path" Demo
+This script automatically boots 4 AXL mesh nodes, starts the Seller agent, starts 3 Buyer agents, allows them to negotiate, deploys the smart contract, funds it, and executes the Keeper.
 ```bash
 bash scripts/happy-path.sh
 ```
 *Note: The script outputs the Gensyn Explorer URL at the very end to prove the atomic commit happened on-chain.*
 
-### Step 3: Run the "Drop-Out" Replay
+### Step 2: Run the "Drop-Out" Replay
 This proves the trustless nature of the protocol. It follows the exact same flow as the Happy Path, but Buyer 3 is configured to flake (`AUTO_FUND=false`). The Keeper waits for the deadline, recognizes the failure, and triggers `refundAll()` to return the USDC.
 ```bash
 bash scripts/dropout-replay.sh
@@ -111,10 +102,6 @@ We do not use a centralized backend.
 - **`MockUSDC.sol`**: Deployed specifically for this hackathon because public USDC testnets do not exist on Gensyn. Buyers are minted 10,000 MockUSDC to facilitate testing.
 - **`Coalition.sol`**: An ephemeral escrow contract. It tracks the `Funded` state. If the required threshold of MockUSDC is met, `commit()` sends the pooled funds to the Seller. If it expires, `refundAll()` releases the funds back to the buyers.
 
-### The Web UI
-- The UI uses `child_process.spawn` via Next.js API routes (`web/src/app/api/spawn/route.ts`) to programmatically boot the TypeScript agents in the background.
-- It polls the agents locally at `http://localhost:{port}/status` to draw the UI state.
-
 ---
 
 ## 6. Gotchas & What NOT to Change
@@ -123,7 +110,7 @@ We do not use a centralized backend.
 2. **AXL Ports:** The AXL internal `tcp_port` must match across all nodes (default `7000`), otherwise they cannot mesh. The HTTP API ports (`9002`, `9012`) must be unique.
 3. **Commitment Hashing:** The intent commitment hash is deterministic (`H(skuHash || tier_bucket || deadline_bucket)`). There is no nonce. This is explicitly required so that identical-intent buyers produce identical hashes for K-Anonymity discovery.
 4. **Coordinator Election:** Election is deterministic—it simply selects the lex-smallest `peer_id` of the cluster members. It works flawlessly for the hackathon; do not waste time building a complex consensus mechanism.
-5. **UI Spawn Order:** The Web UI API route returns an HTTP 503 if the Seller node is unreachable. The seller must be booted *before* buyers. The bash scripts handle this automatically.
+5. **Seller Boot Order:** The seller agent must be booted *before* buyers. The bash scripts handle this automatically.
 
 ---
 
@@ -131,7 +118,6 @@ We do not use a centralized backend.
 
 If you are expanding this project, focus on the following:
 1. **0G Storage key:** Set `ZEROG_FLOW_ADDRESS` in `agent/.env.buyer*` (get from docs.0g.ai) to enable real off-chain Storage uploads. Without it the agent uses a content-addressed URI stub.
-2. **Dynamic UI:** The Next.js frontend is currently highly tailored to the 3-buyer demo. Making it dynamically support N-buyers would be a nice polish.
-3. **Record the Demo:** Everything works. Record your screen running `bash scripts/happy-path.sh` and clicking the Gensyn explorer link!
+2. **Record the Demo:** Everything works. Record your screen running `bash scripts/happy-path.sh` and clicking the Gensyn explorer link!
 
 Good luck! You have a pristine, battle-tested codebase.

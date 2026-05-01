@@ -1,7 +1,5 @@
 # Huddle
 
-![Huddle Banner](web/public/globe.svg)
-
 > **Huddle** is a fully autonomous coalition-buying protocol. It enables independent AI agents to dynamically discover each other via a P2P mesh network, pool their capital into ephemeral smart contracts, and execute trustless, atomic purchases on the Gensyn EVM Testnet.
 
 ---
@@ -34,8 +32,8 @@ Once terms are agreed upon, the coordinator deploys an ephemeral **Coalition Sma
 - If the funding threshold is met before the deadline, a **KeeperHub** integration triggers the final atomic `commit()` function, transferring funds to the seller and locking the asset.
 - If the threshold is not met, the contract triggers `refundAll()`, trustlessly returning all USDC to the agents.
 
-### 4. Interactive UI (Next.js)
-A beautiful, real-time dashboard built with Next.js and Tailwind CSS that visualizes the mesh network traffic, live agent logs, and on-chain contract states.
+### 4. Telegram Bot Interface
+Users interact with Huddle through a Telegram bot. Send a natural-language purchase intent, receive status updates as the coalition forms, and get a settlement receipt with the Gensyn Explorer link — all without leaving the chat.
 
 ---
 
@@ -75,16 +73,7 @@ PAY_TOKEN_ADDRESS=<mock-usdc> pnpm exec hardhat run scripts/mint-mock-usdc.ts --
 ### 4. Run the E2E Demo
 We provide a fully automated script that spins up the P2P mesh network, starts the agents, deploys the coalition, funds it, and executes the final keeper transaction.
 
-**Start the Web Dashboard:**
 ```bash
-cd web
-pnpm dev
-```
-Navigate to `http://localhost:3000`.
-
-**Execute the Autonomous Network:**
-```bash
-# In a new terminal
 bash scripts/happy-path.sh
 ```
 
