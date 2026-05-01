@@ -45,11 +45,20 @@ async function main() {
     console.log(`tick state=${stateLabel(state)} funded=${funded}/${required} now=${now} validUntil=${validUntil}`);
 
     if (state === 1) {
-      const tx = await coalition.commit();
-      await tx.wait();
-      console.log(`commit tx=${tx.hash}`);
-      if (stopOnTerminal) break;
-    } else if ((state === 0 || state === 1) && now > validUntil) {
+      // Re-read state immediately before committing — KeeperHub cloud workflow
+      // may have already called commit() via its own sponsored key.
+      const freshState = Number(await coalition.state());
+      if (freshState === 2) {
+        console.log(`[keeper] coalition already committed (KeeperHub fired first). Skipping.`);
+        if (stopOnTerminal) break;
+      } else {
+        const tx = await coalition.commit();
+        await tx.wait();
+        console.log(`commit tx=${tx.hash}`);
+        if (stopOnTerminal) break;
+      }
+    } else if (state === 0 && now > validUntil) {
+      // Forming + expired — all buyers must be refunded.
       const tx = await coalition.refundAll();
       await tx.wait();
       console.log(`refundAll tx=${tx.hash}`);

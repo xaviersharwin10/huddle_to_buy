@@ -1,4 +1,6 @@
 import { createServer } from "http";
+import fs from "fs";
+import path from "path";
 import {
   verifyQuotePayment,
   QUOTE_FEE_UNITS,
@@ -62,13 +64,34 @@ export type NegotiateResponse = {
 export class SellerAgent {
   private myPeerId = "";
   private gossip!: GossipSub;
-  private usedPayments = new Set<string>();
+  private readonly paymentsFile = path.join(process.cwd(), "used_payments.json");
+  private usedPayments: Set<string>;
 
   constructor(
     private readonly axl: AxlClient,
     private readonly log: (s: string) => void = console.log,
     private readonly offerValidForMs = 30 * 60 * 1000,
-  ) {}
+  ) {
+    this.usedPayments = this.loadPayments();
+  }
+
+  private loadPayments(): Set<string> {
+    try {
+      if (fs.existsSync(this.paymentsFile)) {
+        return new Set<string>(JSON.parse(fs.readFileSync(this.paymentsFile, "utf8")));
+      }
+    } catch {}
+    return new Set<string>();
+  }
+
+  private markPaymentUsed(txHash: string): void {
+    this.usedPayments.add(txHash);
+    try {
+      fs.writeFileSync(this.paymentsFile, JSON.stringify([...this.usedPayments]));
+    } catch (e) {
+      this.log(`WARNING: failed to persist used_payments: ${(e as Error).message}`);
+    }
+  }
 
   async init(): Promise<void> {
     const t = await this.axl.topology();
@@ -291,7 +314,7 @@ export class SellerAgent {
         return;
       }
 
-      this.usedPayments.add(txHash);
+      this.markPaymentUsed(txHash);
 
       // ── Step 3: return tier price ───────────────────────────────────────
       const tierPrice = pickTierPrice(sku, nBuyers);

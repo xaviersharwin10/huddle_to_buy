@@ -41,6 +41,7 @@ export type ClusterState = {
   offer?: { tierUnitPrice: number; validUntilMs: number };
   coalitionAddress?: `0x${string}`;
   fundedByMe?: boolean;
+  fallbackTimer?: ReturnType<typeof setTimeout>;
 };
 
 type Logger = (s: string) => void;
@@ -371,6 +372,21 @@ export class HuddleAgent {
     }
 
     if (isMe) await this.tryNegotiate(c);
+
+    // Arm fallback: the second lex peer takes over if no coalition_ready arrives in 30s.
+    // All agents agree on who the fallback is deterministically — no extra messages needed.
+    const isFallback = sorted.length >= 2 && sorted[1] === this.myPeerId;
+    if (isFallback) {
+      cluster.fallbackTimer = setTimeout(async () => {
+        if (!cluster.coalitionAddress) {
+          this.log(`*** FALLBACK coordinator timeout for c=${short(c)} — taking over from ${short(sorted[0])} ***`);
+          cluster.coordinator = this.myPeerId;
+          cluster.negotiateSent = false;
+          await this.tryNegotiate(c);
+        }
+      }, 30_000);
+      this.log(`fallback: 30s timer armed for c=${short(c)} (primary=${short(sorted[0])})`);
+    }
   }
 
   private async tryNegotiate(c: string): Promise<void> {
@@ -381,6 +397,14 @@ export class HuddleAgent {
       return;
     }
     cluster.negotiateSent = true;
+
+    // COORDINATOR_CRASH_TEST=true: primary coordinator stalls before negotiating,
+    // letting the 30s fallback timer fire reliably for Scenario 2 demo/testing.
+    const crashTest = (process.env.COORDINATOR_CRASH_TEST ?? "false").toLowerCase() === "true";
+    if (crashTest && cluster.coordinator === this.myPeerId) {
+      this.log(`[crash-test] primary coordinator stalling — fallback should take over in 30s`);
+      await sleep(60_000);
+    }
 
     // Try X402 HTTP first — pays 0.01 MockUSDC and gets tier price back directly.
     if (this.sellerApi) {
@@ -624,10 +648,25 @@ export class HuddleAgent {
       this.log(`drop coalition_ready c=${short(env.commitment)} — unknown cluster`);
       return;
     }
-    if (cluster.coordinator && env.from !== cluster.coordinator) {
-      this.log(`drop coalition_ready c=${short(env.commitment)} — sender is not coordinator`);
+
+    // Accept from the elected coordinator OR the designated fallback (second lex peer).
+    // The fallback may have taken over if the primary timed out.
+    const sorted = [...cluster.members.keys()].sort();
+    const isAcceptable =
+      !cluster.coordinator ||
+      env.from === cluster.coordinator ||
+      (sorted.length >= 2 && env.from === sorted[1]);
+    if (!isAcceptable) {
+      this.log(`drop coalition_ready c=${short(env.commitment)} — unexpected sender ${short(env.from)}`);
       return;
     }
+
+    // Cancel fallback timer — whoever sent coalition_ready succeeded.
+    if (cluster.fallbackTimer) {
+      clearTimeout(cluster.fallbackTimer);
+      cluster.fallbackTimer = undefined;
+    }
+    cluster.coordinator = env.from;
 
     cluster.coalitionAddress = env.coalition_address;
     this.log(`coalition_ready c=${short(env.commitment)} addr=${env.coalition_address} chain=${env.chain_id}`);
