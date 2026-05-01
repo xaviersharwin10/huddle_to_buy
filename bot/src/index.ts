@@ -74,7 +74,7 @@ bot.onText(/\/start/, (msg) => {
   const { address, agentPort } = users[chatId];
   bot.sendMessage(
     chatId,
-    `Welcome to Huddle!\n\n💳 Wallet: \`${address}\`\n🔌 Node: \`localhost:${agentPort}\`\n\nPlease deposit Gensyn Testnet ETH and MockUSDC. You can also use /faucet to get test funds automatically.`,
+    `Welcome to Huddle!\n\n💳 Wallet: \`${address}\`\n\nPlease deposit Gensyn Testnet ETH and MockUSDC. You can also use /faucet to get test funds automatically.`,
     { parse_mode: "Markdown" }
   );
 });
