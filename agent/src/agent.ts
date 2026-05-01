@@ -488,6 +488,13 @@ export class HuddleAgent {
       const expiryS = Math.round((validUntilMs - Date.now()) / 1000);
       this.log(`x402: OFFER $${tierUnitPrice}/unit × ${sample.qty} × ${cluster.members.size}; saved $${savedPerBuyer.toFixed(2)}/buyer ($${totalSaved.toFixed(2)} total); valid ${expiryS}s`);
 
+      // 0G Compute: delegate accept/reject decision to qwen3.6-plus inference.
+      const shouldAccept = await this.decide0GCompute(indivPrice, tierUnitPrice, sample.qty, cluster.members.size);
+      if (!shouldAccept) {
+        this.log(`0G Compute: offer rejected — AI assessed $${tierUnitPrice}/unit below threshold`);
+        return false;
+      }
+
       // Synthesise a NegotiateRespEnv so the existing coalition-deploy path is reused.
       const fakeResp: NegotiateRespEnv = {
         v: 1,
@@ -580,6 +587,31 @@ export class HuddleAgent {
         }
       }
 
+      // AXL MCP: notify the seller's order-book service via the P2P mesh using
+      // the full AXL MCP transport layer (/mcp/{peer}/{service}).
+      if (this.sellerPeerId) {
+        try {
+          const mcpReq = {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "record_coalition",
+              arguments: {
+                coalition_address: coalitionAddress,
+                sku: env.sku,
+                n_buyers: env.n_buyers,
+                chain_id: this.onchain.chainId,
+              },
+            },
+          };
+          const mcpRes = await this.axl.mcp(this.sellerPeerId, "order-book", mcpReq);
+          this.log(`AXL MCP: /mcp/${short(this.sellerPeerId)}/order-book → ${JSON.stringify(mcpRes).slice(0, 120)}`);
+        } catch (e) {
+          this.log(`AXL MCP: /mcp/${short(this.sellerPeerId)}/order-book call failed (${(e as Error).message})`);
+        }
+      }
+
       await this.maybeFundCoalition(env.commitment, coalitionAddress);
     } catch (e) {
       this.log(`  ! coalition deployment failed: ${(e as Error).message}`);
@@ -666,6 +698,57 @@ export class HuddleAgent {
       }
     } catch (e) {
       this.log(`  ! fund failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Uses 0G Compute (qwen3.6-plus) to decide whether to accept a bulk offer.
+   * Falls back to a simple price comparison when ZEROG_COMPUTE_API_KEY is not set.
+   */
+  private async decide0GCompute(
+    maxUnitPrice: number,
+    offerUnitPrice: number,
+    qty: number,
+    nBuyers: number,
+  ): Promise<boolean> {
+    const apiKey = process.env.ZEROG_COMPUTE_API_KEY ?? "";
+    const apiUrl = (process.env.ZEROG_COMPUTE_URL ?? "https://inference.0g.ai").replace(/\/$/, "");
+
+    if (!apiKey) {
+      this.log(`0G Compute: ZEROG_COMPUTE_API_KEY not set — using price comparison`);
+      return offerUnitPrice <= maxUnitPrice;
+    }
+
+    const discount = ((1 - offerUnitPrice / maxUnitPrice) * 100).toFixed(1);
+    const prompt =
+      `You are a bulk-buying AI agent coordinating a coalition of ${nBuyers} buyers. ` +
+      `A supplier offered ${qty} units at $${offerUnitPrice} each (${discount}% below your max of $${maxUnitPrice}). ` +
+      `Reply with exactly one word: accept or reject.`;
+
+    try {
+      const res = await fetch(`${apiUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: "qwen3.6-plus",
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 5,
+          temperature: 0,
+        }),
+      });
+
+      if (!res.ok) {
+        this.log(`0G Compute: HTTP ${res.status} — falling back to price comparison`);
+        return offerUnitPrice <= maxUnitPrice;
+      }
+
+      const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const answer = (data.choices?.[0]?.message?.content ?? "").toLowerCase().trim();
+      this.log(`0G Compute qwen3.6-plus: "${answer}" (offer=$${offerUnitPrice} max=$${maxUnitPrice} discount=${discount}%)`);
+      return answer.startsWith("accept");
+    } catch (e) {
+      this.log(`0G Compute: ${(e as Error).message} — falling back to price comparison`);
+      return offerUnitPrice <= maxUnitPrice;
     }
   }
 

@@ -53,4 +53,16 @@ export class AxlClient {
       .map((n) => n.public_key)
       .filter((k) => k !== t.our_public_key);
   }
+
+  /** Forward an MCP JSON-RPC request to a remote peer via the AXL P2P mesh.
+   *  The AXL node proxies POST /mcp/{peerPubKey}/{service} over the P2P transport. */
+  async mcp(peerPubKey: string, service: string, body: object): Promise<unknown> {
+    const res = await fetch(`${this.base}/mcp/${peerPubKey}/${service}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`AXL /mcp/${service} ${res.status}: ${await res.text()}`);
+    return res.json();
+  }
 }

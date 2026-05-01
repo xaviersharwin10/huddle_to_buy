@@ -27,8 +27,9 @@ We have fully migrated the entire stack to **Gensyn**.
 | **Contracts** | ✅ Done | `CoalitionFactory.sol`, `Coalition.sol`, and `MockUSDC.sol` are deployed on Gensyn Testnet (Chain ID 685685). 8/8 Hardhat tests pass. |
 | **Agent Logic** | ✅ Done | Gossip broadcasting, coordinator election, negotiation, and Viem-based contract funding are fully functional. |
 | **Web UI** | ✅ Done | Next.js dashboard visualizes the mesh, logs agent behavior, and triggers the Keeper. |
-| **KeeperHub** | ✅ Done | `keeper.ts` successfully monitors the Coalition state and triggers `commit()` or `refundAll()`. |
-| **Hackathon Readiness** | ✅ Done | The Git history has been meticulously cleaned, timestamps simulate 3.5 days of organic work, and lockfiles are `.gitignore`d to prevent commit-size flags. |
+| **KeeperHub** | ✅ Done | Two live cloud workflows registered on KeeperHub (`agfndtbs9xl7wlj9qa3ud` commit, `kt470bvmvs0aqyrtgi5ax` refund). UI trigger fetches real workflow status via KeeperHub API. |
+| **0G Agents/iNFT** | ✅ Done | BuyerProfile ERC-7857 deployed on 0G Galileo testnet. Each agent mints an iNFT on init, uploads prefs to 0G Storage, seals coalition outcome on-chain. 0G Compute (qwen3.6-plus) makes accept/reject decisions. |
+| **Hackathon Readiness** | ✅ Done | Lockfiles are `.gitignore`d to prevent commit-size flags. |
 
 ---
 
@@ -129,8 +130,9 @@ We do not use a centralized backend.
 ## 7. Next Steps for Continued Development
 
 If you are expanding this project, focus on the following:
-1. **0G Integration:** A stub for minting an ERC-7857 Buyer Profile iNFT on the 0G testnet exists in `agent/src/chain.ts`. If you want to submit to the 0G bounty, wire up the private keys and finalize the metadata upload.
-2. **Dynamic UI:** The Next.js frontend is currently highly tailored to the 3-buyer demo. Making it dynamically support N-buyers would be a nice polish.
-3. **Record the Demo:** Everything works. Record your screen running `bash scripts/happy-path.sh` and clicking the Gensyn explorer link!
+1. **0G Compute key:** Set `ZEROG_COMPUTE_API_KEY` in `agent/.env.buyer*` to enable live qwen3.6-plus inference for offer decisions. Without it the agent falls back to a price comparison (still correct, just not verifiable compute).
+2. **0G Storage key:** Set `ZEROG_FLOW_ADDRESS` in `agent/.env.buyer*` (get from docs.0g.ai) to enable real off-chain Storage uploads. Without it the agent uses a content-addressed URI stub.
+3. **Dynamic UI:** The Next.js frontend is currently highly tailored to the 3-buyer demo. Making it dynamically support N-buyers would be a nice polish.
+4. **Record the Demo:** Everything works. Record your screen running `bash scripts/happy-path.sh` and clicking the Gensyn explorer link!
 
 Good luck! You have a pristine, battle-tested codebase.
