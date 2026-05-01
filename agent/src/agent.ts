@@ -512,7 +512,7 @@ export class HuddleAgent {
       const expiryS = Math.round((validUntilMs - Date.now()) / 1000);
       this.log(`x402: OFFER $${tierUnitPrice}/unit × ${sample.qty} × ${cluster.members.size}; saved $${savedPerBuyer.toFixed(2)}/buyer ($${totalSaved.toFixed(2)} total); valid ${expiryS}s`);
 
-      // 0G Compute: delegate accept/reject decision to qwen3.6-plus inference.
+      // 0G Compute: delegate accept/reject decision to qwen/qwen-2.5-7b-instruct inference.
       const shouldAccept = await this.decide0GCompute(indivPrice, tierUnitPrice, sample.qty, cluster.members.size);
       if (!shouldAccept) {
         this.log(`0G Compute: offer rejected — AI assessed $${tierUnitPrice}/unit below threshold`);
@@ -741,7 +741,7 @@ export class HuddleAgent {
   }
 
   /**
-   * Uses 0G Compute (qwen3.6-plus) to decide whether to accept a bulk offer.
+   * Uses 0G Compute (qwen/qwen-2.5-7b-instruct) to decide whether to accept a bulk offer.
    * Falls back to a simple price comparison when ZEROG_COMPUTE_API_KEY is not set.
    */
   private async decide0GCompute(
@@ -751,10 +751,13 @@ export class HuddleAgent {
     nBuyers: number,
   ): Promise<boolean> {
     const apiKey = process.env.ZEROG_COMPUTE_API_KEY ?? "";
-    const apiUrl = (process.env.ZEROG_COMPUTE_URL ?? "https://inference.0g.ai").replace(/\/$/, "");
+    // ZEROG_COMPUTE_URL is the provider-specific service URL from the 0G Compute
+    // Marketplace (pc.0g.ai). Format: https://<provider-host>
+    // The proxy path /v1/proxy/chat/completions is the 0G standard for inference.
+    const apiUrl = (process.env.ZEROG_COMPUTE_URL ?? "").replace(/\/$/, "");
 
-    if (!apiKey) {
-      this.log(`0G Compute: ZEROG_COMPUTE_API_KEY not set — using price comparison`);
+    if (!apiKey || !apiUrl) {
+      this.log(`0G Compute: ZEROG_COMPUTE_API_KEY/ZEROG_COMPUTE_URL not set — using price comparison`);
       return offerUnitPrice <= maxUnitPrice;
     }
 
@@ -765,11 +768,11 @@ export class HuddleAgent {
       `Reply with exactly one word: accept or reject.`;
 
     try {
-      const res = await fetch(`${apiUrl}/v1/chat/completions`, {
+      const res = await fetch(`${apiUrl}/v1/proxy/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: "qwen3.6-plus",
+          model: process.env.ZEROG_COMPUTE_MODEL ?? "qwen/qwen-2.5-7b-instruct",
           messages: [{ role: "user", content: prompt }],
           max_tokens: 5,
           temperature: 0,
@@ -783,7 +786,7 @@ export class HuddleAgent {
 
       const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
       const answer = (data.choices?.[0]?.message?.content ?? "").toLowerCase().trim();
-      this.log(`0G Compute qwen3.6-plus: "${answer}" (offer=$${offerUnitPrice} max=$${maxUnitPrice} discount=${discount}%)`);
+      this.log(`0G Compute: "${answer}" via ${apiUrl} (offer=$${offerUnitPrice} max=$${maxUnitPrice} discount=${discount}%)`);
       return answer.startsWith("accept");
     } catch (e) {
       this.log(`0G Compute: ${(e as Error).message} — falling back to price comparison`);
