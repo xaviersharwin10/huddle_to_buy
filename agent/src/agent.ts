@@ -15,6 +15,7 @@ import {
   deployCoalition,
   fundCoalitionForBuyer,
   mintBuyerProfile0G,
+  sealCoalitionInference,
   sendQuotePayment,
   toTokenUnits,
   type OnchainConfig,
@@ -23,6 +24,12 @@ import {
 import { canonicalSku, commitment, type Intent, newNonce } from "./intent.js";
 import { keccak256, toHex } from "viem";
 import { IntentObserver } from "./observer.js";
+import {
+  createZeroGStorageConfigFromEnv,
+  uploadProfileBlob,
+  writeCoalitionKv,
+  type ZeroGStorageConfig,
+} from "./zerog-storage.js";
 
 export type ClusterState = {
   commitment: string;
@@ -65,6 +72,8 @@ export class HuddleAgent {
   private readonly knownPeers: string[] | null;
   private readonly onchain: OnchainConfig | null;
   private readonly zeroGProfile: ZeroGProfileConfig | null;
+  private readonly zeroGStorage: ZeroGStorageConfig | null;
+  private myTokenId: bigint | null = null;
   private readonly autoFund: boolean;
   private readonly fundDelayMs: number;
   private readonly log: Logger;
@@ -76,6 +85,7 @@ export class HuddleAgent {
     this.knownPeers = opts.knownPeers ?? null;
     this.onchain = opts.onchain ?? createOnchainConfigFromEnv();
     this.zeroGProfile = createZeroGProfileConfigFromEnv();
+    this.zeroGStorage = createZeroGStorageConfigFromEnv();
     this.autoFund = opts.autoFund ?? true;
     this.fundDelayMs = opts.fundDelayMs ?? 0;
     this.log = opts.log ?? console.log;
@@ -124,11 +134,36 @@ export class HuddleAgent {
     // 0G Buyer Profile iNFT mint (best-effort; only when fully configured).
     if (this.zeroGProfile) {
       try {
-        const tx = await mintBuyerProfile0G(
-          this.zeroGProfile,
-          `0g://sealed-preference/${this.myPeerId}`,
-        );
-        if (tx) this.log(`0G iNFT mintProfile tx: ${tx}`);
+        // Build agent preference blob — this is the data stored in 0G Storage.
+        const prefJson = JSON.stringify({
+          agentId: this.myPeerId,
+          chain: "huddle-v1",
+          network: "gensyn-testnet-685685",
+          timestamp: Date.now(),
+        });
+        const prefBuf = Buffer.from(prefJson, "utf8");
+
+        // Attempt real 0G Storage upload; fall back to content-addressed URI.
+        let storageUri: string;
+        if (this.zeroGStorage) {
+          try {
+            const uri = await uploadProfileBlob(this.zeroGStorage, prefBuf);
+            storageUri = uri ?? `0g://huddle-buyer/v1/${keccak256(toHex(prefJson))}`;
+            this.log(`0G Storage: profile blob uploaded → ${storageUri}`);
+          } catch (e) {
+            storageUri = `0g://huddle-buyer/v1/${keccak256(toHex(prefJson))}`;
+            this.log(`0G Storage: upload skipped (${(e as Error).message}) → ${storageUri}`);
+          }
+        } else {
+          storageUri = `0g://huddle-buyer/v1/${keccak256(toHex(prefJson))}`;
+          this.log(`0G Storage: skipped (set ZEROG_FLOW_ADDRESS to enable) → ${storageUri}`);
+        }
+
+        const result = await mintBuyerProfile0G(this.zeroGProfile, storageUri);
+        if (result) {
+          this.myTokenId = result.tokenId;
+          this.log(`0G iNFT: mintProfile tx=${result.txHash} tokenId=${result.tokenId} uri=${storageUri}`);
+        }
       } catch (e) {
         this.log(`0G iNFT mint failed: ${(e as Error).message}`);
       }
@@ -598,6 +633,37 @@ export class HuddleAgent {
       }
       this.log(`fund: success tx=${fundTx}`);
       cluster.fundedByMe = true;
+
+      // Seal the coalition outcome into the buyer's 0G iNFT (best-effort).
+      const sample = [...cluster.members.values()][0];
+      if (this.zeroGProfile && this.myTokenId !== null) {
+        try {
+          const sealTx = await sealCoalitionInference({
+            cfg: this.zeroGProfile,
+            tokenId: this.myTokenId,
+            coalitionAddress,
+            sku: sample.sku,
+          });
+          this.log(`0G iNFT: sealInference tx=${sealTx} tokenId=${this.myTokenId} coalition=${coalitionAddress}`);
+        } catch (e) {
+          this.log(`0G iNFT sealInference failed: ${(e as Error).message}`);
+        }
+      }
+
+      // Write coalition outcome to 0G KV store (best-effort).
+      if (this.zeroGStorage && this.myTokenId !== null) {
+        try {
+          const kvTx = await writeCoalitionKv(
+            this.zeroGStorage,
+            coalitionAddress,
+            sample.sku,
+            this.myTokenId,
+          );
+          this.log(`0G KV: coalition outcome written txHash=${kvTx} coalition=${coalitionAddress}`);
+        } catch (e) {
+          this.log(`0G KV write failed: ${(e as Error).message}`);
+        }
+      }
     } catch (e) {
       this.log(`  ! fund failed: ${(e as Error).message}`);
     }

@@ -4,7 +4,9 @@ import {
   decodeEventLog,
   defineChain,
   http,
+  keccak256,
   parseUnits,
+  toHex,
 } from "viem";
 // import { defineChain } from "viem";
 
@@ -115,6 +117,34 @@ const BUYER_PROFILE_ABI = [
     inputs: [{ name: "storageUri", type: "string" }],
     outputs: [{ name: "", type: "uint256" }],
   },
+  {
+    type: "function",
+    name: "sealInference",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenId", type: "uint256" },
+      { name: "inferenceHash", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "event",
+    name: "ProfileStored",
+    inputs: [
+      { indexed: true, name: "tokenId", type: "uint256" },
+      { indexed: false, name: "storageUri", type: "string" },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "InferenceSealed",
+    inputs: [
+      { indexed: true, name: "tokenId", type: "uint256" },
+      { indexed: false, name: "inferenceHash", type: "bytes32" },
+    ],
+    anonymous: false,
+  },
 ] as const;
 
 export type OnchainConfig = {
@@ -177,7 +207,7 @@ export function createZeroGProfileConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ZeroGProfileConfig | null {
   const rpcUrl = env.ZEROG_RPC_URL ?? "https://evmrpc-testnet.0g.ai";
-  const chainId = Number(env.ZEROG_CHAIN_ID ?? "16600");
+  const chainId = Number(env.ZEROG_CHAIN_ID ?? "16602");
   const privateKey = env.ZEROG_PRIVATE_KEY ?? env.PRIVATE_KEY ?? "";
   const buyerProfileAddress = env.BUYER_PROFILE_ADDRESS ?? "";
 
@@ -333,13 +363,13 @@ export async function fundCoalitionForBuyer(args: {
 export async function mintBuyerProfile0G(
   cfg: ZeroGProfileConfig | null,
   storageUri: string,
-): Promise<`0x${string}` | null> {
+): Promise<{ txHash: `0x${string}`; tokenId: bigint } | null> {
   if (!cfg) return null;
 
   const chain = defineChain({
     id: cfg.chainId,
     name: "0G Testnet",
-    nativeCurrency: { name: "0G", symbol: "0G", decimals: 18 },
+    nativeCurrency: { name: "A0GI", symbol: "A0GI", decimals: 18 },
     rpcUrls: { default: { http: [cfg.rpcUrl] } },
   });
 
@@ -353,6 +383,51 @@ export async function mintBuyerProfile0G(
     functionName: "mintProfile",
     args: [storageUri],
     gas: 300_000n,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+  for (const log of receipt.logs) {
+    try {
+      const parsed = decodeEventLog({ abi: BUYER_PROFILE_ABI, data: log.data, topics: log.topics });
+      if (parsed.eventName === "ProfileStored") {
+        return { txHash: hash, tokenId: parsed.args.tokenId };
+      }
+    } catch { /* unrelated log */ }
+  }
+  throw new Error(`mintProfile tx ${hash} succeeded but ProfileStored event not found`);
+}
+
+/** Seals a coalition outcome into the buyer's iNFT on 0G testnet.
+ *  inferenceHash = keccak256(abi.encode(coalitionAddress, sku)) — a verifiable
+ *  fingerprint of which deal this agent committed to. */
+export async function sealCoalitionInference(args: {
+  cfg: ZeroGProfileConfig;
+  tokenId: bigint;
+  coalitionAddress: `0x${string}`;
+  sku: string;
+}): Promise<`0x${string}`> {
+  const { cfg, tokenId, coalitionAddress, sku } = args;
+
+  const chain = defineChain({
+    id: cfg.chainId,
+    name: "0G Testnet",
+    nativeCurrency: { name: "A0GI", symbol: "A0GI", decimals: 18 },
+    rpcUrls: { default: { http: [cfg.rpcUrl] } },
+  });
+
+  const account = privateKeyToAccount(cfg.privateKey);
+  const wallet = createWalletClient({ account, chain, transport: http(cfg.rpcUrl) });
+  const publicClient = createPublicClient({ chain, transport: http(cfg.rpcUrl) });
+
+  // deterministic fingerprint: keccak256 of "<coalitionAddress>:<sku>"
+  const inferenceHash = keccak256(toHex(`${coalitionAddress}:${sku}`));
+
+  const hash = await wallet.writeContract({
+    address: cfg.buyerProfileAddress,
+    abi: BUYER_PROFILE_ABI,
+    functionName: "sealInference",
+    args: [tokenId, inferenceHash],
+    gas: 150_000n,
   });
   await publicClient.waitForTransactionReceipt({ hash });
   return hash;

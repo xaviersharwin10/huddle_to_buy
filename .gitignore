@@ -13,6 +13,8 @@ contracts/cache/
 contracts/typechain-types/
 *.md
 !README.md
+!FEEDBACK.md
+!HANDOFF.md
 
 # Lockfiles (ignored to keep commits small)
 pnpm-lock.yaml

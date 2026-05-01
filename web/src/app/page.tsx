@@ -31,28 +31,32 @@ function Agent3DScene({ gState }: any) {
   const getThought = (botId: string) => {
     if (isIdle) return null;
     if (isTransmitting) {
-      if (botId === 'b1') return "I bid 2.0 ETH!";
-      if (botId === 'b2') return "[THOUGHT] 0G logs show B1 bids high.";
-      if (botId === 'b3') return "Evaluating Execution Risk...";
-      if (botId === 'seller') return "Awaiting valid KeeperHub proof...";
+      // Broadcasting phase: buyers have committed intents, waiting for k=3 threshold
+      if (botId === 'b1') return "commit broadcast on AXL mesh…";
+      if (botId === 'b2') return "scanning for matching intents…";
+      if (botId === 'b3') return "k=3 threshold not yet reached";
+      if (botId === 'seller') return "listening on huddle GossipSub…";
     }
     if (isNegotiating) {
-      if (botId === 'b1') return "Pending tx...";
-      if (botId === 'b2') return "[P2P] Join my guild? We use 0G.";
-      if (botId === 'b3') return "[P2P] Agreed. Sending 0.5 ETH.";
-      if (botId === 'seller') return "Verifying Keeper SLA...";
+      // Coordinator (b1) sends negotiate_request / X402 quote, offer received
+      if (botId === 'b1') return "paying X402 quote fee → seller";
+      if (botId === 'b2') return "reveal_response sent ✓";
+      if (botId === 'b3') return "cluster formed! awaiting offer…";
+      if (botId === 'seller') return "X402 verified → tier price set";
     }
     if (isDeploying) {
-      if (botId === 'b1') return "Failed: Gas Spike!";
-      if (botId === 'b2') return "[ONCHAIN_ACTION] Bidding 2.1 ETH via KeeperHub";
-      if (botId === 'b3') return "Liquidity pooled via AXL.";
-      if (botId === 'seller') return "B2's bid verified by KeeperHub.";
+      // Coalition deployed, buyers fund escrow
+      if (botId === 'b1') return "Coalition.sol deployed, funding…";
+      if (botId === 'b2') return "coalition_ready → approve+fund";
+      if (botId === 'b3') return "coalition_ready → approve+fund";
+      if (botId === 'seller') return "waiting for KeeperHub commit()";
     }
     if (isDone) {
-      if (botId === 'b1') return "Out of Gas.";
-      if (botId === 'b2') return "Asset Won via Guild!";
-      if (botId === 'b3') return "Share secured.";
-      if (botId === 'seller') return "Sale Complete. Saving to 0G.";
+      // All buyers funded, keeper calls commit()
+      if (botId === 'b1') return "escrow funded ✓ keeper pending";
+      if (botId === 'b2') return "MockUSDC escrowed ✓";
+      if (botId === 'b3') return "MockUSDC escrowed ✓";
+      if (botId === 'seller') return "payout secured via Coalition.sol";
     }
     return null;
   };
@@ -383,16 +387,25 @@ export default function Dashboard() {
     const commit = agState?.myCommits?.[0]; // works for buyers
     const b1Commit = agentsState.buyer1?.myCommits?.[0]; // read source of truth for Seller UI
 
-    // SELLER DASHBOARD ENRICHMENT
+    // SELLER DASHBOARD — driven by live offer data from buyer1's committed cluster
     if (activeTab.type === "seller") {
        const isSelling = gState === "negotiated" || gState === "deploying" || gState === "settled" || gState === "paid";
+       const offer = b1Commit?.offer;
+       const nBuyers = b1Commit?.clusterSize ?? 0;
+       const unitQty = b1Commit?.qty ?? 0;
+       const totalUnits = nBuyers * unitQty;
+       const maxPrice = b1Commit?.max_unit_price ?? 0;
+       const tierPrice = offer?.tierUnitPrice ?? 0;
+       const discountPct = maxPrice > 0 && tierPrice > 0 ? Math.round((1 - tierPrice / maxPrice) * 100) : 0;
+       const totalPayout = tierPrice * totalUnits;
+
        return (
           <section className="glass-panel animate-fade-in animate-delay-1">
              <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem' }}>Dynamic Tier Evaluation</h2>
              {!isSelling ? (
                 <div style={{ textAlign: 'center', color: '#a1a1aa', padding: '2rem 0' }}>
-                  <p>Awaiting valid bulk coalition signals on encrypted AXL mesh...</p>
-                  {agState && <p style={{color: '#6366f1', marginTop: '1rem', fontStyle: 'italic'}}>Listening natively on {agState.axl}</p>}
+                  <p>Awaiting negotiate_request on GossipSub huddle topic…</p>
+                  {agState && <p style={{color: '#6366f1', marginTop: '1rem', fontStyle: 'italic'}}>Seller peer online · X402 quote server active</p>}
                 </div>
              ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
@@ -402,27 +415,32 @@ export default function Dashboard() {
                          <h3 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#10b981' }}>Coalition Request Received & Evaluated</h3>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', color: '#e4e4e7', fontFamily: 'monospace' }}>
-                        <p>&gt; Evaluated Total Requested Qty: <b>30 Units</b></p>
-                        <p>&gt; Base Retail Price: <b>$2.00 / hr</b></p>
-                        <p>&gt; Tier 2 Volume Threshold Met (&gt;= 30 units)</p>
-                        <p>&gt; Applied Vendor Discount: <b>-25%</b></p>
-                        <div style={{ marginTop: '1rem', padding: '1rem', background: '#000', borderRadius: '6px' }}>
-                           <p style={{ color: '#10b981', fontSize: '1.2rem', fontWeight: 'bold' }}>FINAL BINDING OFFER: $1.50 / hr</p>
-                           <p style={{ color: '#a1a1aa', fontSize: '0.8rem', marginTop: '0.5rem' }}>Emitted NegotiateResponse via AXL P2P P2P tunnel.</p>
-                        </div>
+                        <p>&gt; SKU: <b>{b1Commit?.sku ?? "—"}</b></p>
+                        <p>&gt; Buyers in Coalition: <b>{nBuyers}</b> × {unitQty} units = <b>{totalUnits} total units</b></p>
+                        <p>&gt; Buyer Max Unit Price: <b>${maxPrice.toFixed(2)}</b></p>
+                        {offer && <>
+                          <p>&gt; Tier Threshold Met → Applied Bulk Discount: <b>-{discountPct}%</b></p>
+                          <div style={{ marginTop: '1rem', padding: '1rem', background: '#000', borderRadius: '6px' }}>
+                             <p style={{ color: '#10b981', fontSize: '1.2rem', fontWeight: 'bold' }}>FINAL BINDING OFFER: ${tierPrice.toFixed(2)} / unit</p>
+                             <p style={{ color: '#a1a1aa', fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                               Coordinator paid X402 quote fee · offer valid until {new Date(offer.validUntilMs).toLocaleTimeString()}
+                             </p>
+                          </div>
+                        </>}
                       </div>
                    </div>
 
-                   {/* Add seller receiving payment visualization explicitly requested */}
-                   {paymentComplete && b1Commit && (
+                   {paymentComplete && b1Commit && offer && (
                      <div className="animate-fade-in" style={{ background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(16, 185, 129, 0.2))', border: '1px solid #38bdf8', borderRadius: '12px', padding: '1.5rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
                            <span style={{ background: '#38bdf8', color: '#000', padding: '0.25rem 0.5rem', borderRadius: '4px', fontWeight: 'bold' }}>PAYMENT RECEIVED</span>
                         </div>
                         <div style={{ color: '#fff', fontSize: '1.1rem' }}>
-                          <p>The Keeper successfully committed the Coalition Smart Contract logic.</p>
-                          <p style={{ marginTop: '0.5rem', fontWeight: 'bold', fontSize: '1.5rem' }}>Funds Swept: <span style={{color: '#10b981'}}>+(30 units * $1.50) = $45.00 USDC</span></p>
-                          <p style={{ fontSize: '0.8rem', color: '#cbd5e1', marginTop: '0.5rem' }}>View transaction output on Gensyn Testnet: {b1Commit.address}</p>
+                          <p>KeeperHub called <code>commit()</code> on the Coalition escrow.</p>
+                          <p style={{ marginTop: '0.5rem', fontWeight: 'bold', fontSize: '1.5rem' }}>
+                            Payout: <span style={{color: '#10b981'}}>{totalUnits} units × ${tierPrice.toFixed(2)} = ${totalPayout.toFixed(2)} MockUSDC</span>
+                          </p>
+                          <p style={{ fontSize: '0.8rem', color: '#cbd5e1', marginTop: '0.5rem' }}>Coalition: {b1Commit.address}</p>
                         </div>
                      </div>
                    )}
@@ -487,8 +505,8 @@ export default function Dashboard() {
                      <span style={{ fontWeight: 600, color: '#fff' }}>{commit.qty} Units</span>
                    </div>
                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #333', paddingBottom: '1rem', marginBottom: '1rem' }}>
-                     <span style={{ color: '#a1a1aa' }}>Unit Price (Original)</span>
-                     <span style={{ fontWeight: 600, color: '#f43f5e', textDecoration: 'line-through' }}>$2.00</span>
+                     <span style={{ color: '#a1a1aa' }}>Unit Price (Max)</span>
+                     <span style={{ fontWeight: 600, color: '#f43f5e', textDecoration: 'line-through' }}>${commit.max_unit_price.toFixed(2)}</span>
                    </div>
                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '1rem' }}>
                      <span style={{ color: '#a1a1aa' }}>Unit Price (Auto-Negotiated)</span>
@@ -500,8 +518,8 @@ export default function Dashboard() {
                     <a href={`https://gensyn-testnet.explorer.alchemy.com/address/${commit.address}`} target="_blank" rel="noreferrer" style={{ display: 'block', padding: '1rem', background: 'rgba(99,102,241,0.1)', border: '1px solid #6366f1', borderRadius: '8px', color: '#818cf8', textDecoration: 'none', textAlign: 'center', fontWeight: 'bold' }}>
                        View Coalition on Gensyn Testnet Explorer →
                     </a>
-                    <a href="#" style={{ display: 'block', padding: '1rem', background: 'rgba(56,189,248,0.1)', border: '1px solid #38bdf8', borderRadius: '8px', color: '#7dd3fc', textDecoration: 'none', textAlign: 'center', fontWeight: 'bold' }}>
-                       Verify Buyer Preferences zeroG Storage iNFT →
+                    <a href="https://chainscan-galileo.0g.ai/address/0x86583710FB176b5a868262FCc95BFf0DfBeE130C" target="_blank" rel="noreferrer" style={{ display: 'block', padding: '1rem', background: 'rgba(56,189,248,0.1)', border: '1px solid #38bdf8', borderRadius: '8px', color: '#7dd3fc', textDecoration: 'none', textAlign: 'center', fontWeight: 'bold' }}>
+                       Verify Buyer Profile iNFT on 0G Testnet →
                     </a>
                  </div>
                </div>

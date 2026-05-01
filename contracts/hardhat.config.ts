@@ -24,7 +24,7 @@ const config: HardhatUserConfig = {
     zeroGTestnet: {
       url: "https://evmrpc-testnet.0g.ai",
       accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
-      chainId: 16600,
+      chainId: 16602,
     },
   },
 };

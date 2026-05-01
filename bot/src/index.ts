@@ -22,7 +22,9 @@ const gensynChain = {
   },
 };
 
-const treasuryAccount = privateKeyToAccount("0x380da786cc714a6b1ceaa0bf3f0cdf8a07b445e55bf946bae08e5461561b32f0");
+const TREASURY_PRIVATE_KEY = (process.env.TREASURY_PRIVATE_KEY ?? "") as `0x${string}`;
+if (!TREASURY_PRIVATE_KEY) throw new Error("TREASURY_PRIVATE_KEY env var is required");
+const treasuryAccount = privateKeyToAccount(TREASURY_PRIVATE_KEY);
 const walletClient = createWalletClient({
   account: treasuryAccount,
   chain: gensynChain,
@@ -170,7 +172,7 @@ bot.on("message", async (msg) => {
     sku: sku!,
     max_unit_price: maxPrice!,
     qty: qty!,
-    deadline_ms: 24 * 60 * 60 * 1000
+    deadline_ms: Date.now() + 24 * 60 * 60 * 1000
   };
 
   bot.sendMessage(
