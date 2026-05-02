@@ -25,15 +25,23 @@ Each buyer runs an independent TypeScript daemon.
 - Upon discovering a matching intent, they autonomously elect a "Coordinator" using a K-Anonymity matching algorithm.
 - The coordinator negotiates with the Seller Agent and finalizes the terms.
 
-### 3. Trustless Settlement Layer (Gensyn EVM Testnet)
-Once terms are agreed upon, the coordinator deploys an ephemeral **Coalition Smart Contract** to the **Gensyn Testnet** (Chain ID: 685685).
-- The contract enforces the terms of the deal.
-- Agents use **Viem** to autonomously sign and submit funding transactions (using `MockUSDC`).
-- If the funding threshold is met before the deadline, a **KeeperHub** integration triggers the final atomic `commit()` function, transferring funds to the seller and locking the asset.
-- If the threshold is not met, the contract triggers `refundAll()`, trustlessly returning all USDC to the agents.
+### 3. X402 Price Negotiation
+Before deploying any contract, the coordinator agent pays 0.01 MockUSDC to the seller's **X402** HTTP endpoint to unlock the bulk tier price. The seller verifies the on-chain Transfer event before responding — a real machine-to-machine micropayment, not a simulated one.
 
-### 4. Telegram Bot Interface
-Users interact with Huddle through a Telegram bot. Send a natural-language purchase intent, receive status updates as the coalition forms, and get a settlement receipt with the Gensyn Explorer link — all without leaving the chat.
+### 4. Trustless Settlement Layer (Gensyn EVM Testnet)
+Once terms are agreed upon, the coordinator deploys an ephemeral **Coalition Smart Contract** to the **Gensyn Testnet** (Chain ID: 685685).
+- Each buyer agent autonomously approves and calls `fund()` using **Viem** and `MockUSDC`.
+- When the funding threshold is met, **KeeperHub** autonomously triggers the final `commit()`, atomically transferring funds to the seller.
+- If the threshold is not met by the deadline, `refundAll()` trustlessly returns all USDC.
+
+### 5. 0G Network Integration
+Every buyer agent is wired into three 0G primitives:
+- **0G Storage** — agent preference profiles are uploaded as Merkle-DAG blobs at startup.
+- **0G Compute** — the accept/reject decision for the seller's bulk offer is delegated to `qwen/qwen-2.5-7b-instruct` running on the 0G Compute Marketplace.
+- **0G iNFT** — each agent holds an ERC-7857 `BuyerProfile` NFT. After every successful coalition, it seals the deal fingerprint on-chain via `sealInference()`.
+
+### 6. Telegram Bot Interface
+Users interact with Huddle through a Telegram bot powered by Gemini NLU. Send a natural-language purchase intent, receive real-time status updates as the coalition forms, and get a full settlement receipt — including clickable X402 and 0G transaction links — all without leaving the chat.
 
 ---
 
@@ -81,9 +89,21 @@ bash scripts/happy-path.sh
 
 ## 🛠 Hackathon Tracks & Bounties
 
-Huddle was specifically engineered to showcase the power of the **Gensyn** ecosystem:
-- **Gensyn L2 Usage:** 100% of the on-chain settlement, contract logic, and token transfers execute on the Gensyn EVM Testnet.
-- **AXL Integration:** We replaced centralized backends with Gensyn's AXL mesh network for true P2P agent coordination.
-- **AI x Crypto:** Huddle is a foundational primitive for the Agent Economy, proving that AI models can collaboratively pool capital and trustlessly execute transactions without human intervention.
+Huddle was specifically engineered to showcase the power of the **Gensyn** ecosystem and its partner integrations:
+
+- **Gensyn L2 Usage:** 100% of the on-chain settlement, contract logic, and token transfers execute on the Gensyn EVM Testnet (Chain ID 685685). The Coalition smart contract, MockUSDC approvals, fund(), and commit() transactions are all native Gensyn Testnet activity.
+
+- **AXL Integration:** We replaced centralized backends with Gensyn's AXL P2P mesh network. Agents broadcast encrypted purchase intents via GossipSub, discover coalition partners, and coordinate the entire negotiation flow without any central server.
+
+- **0G Network — Storage, Compute & iNFT:** Huddle uses three distinct 0G primitives:
+  - **0G Storage:** On agent startup, each buyer's preference profile is uploaded as a Merkle-DAG blob to 0G Storage and content-addressed via `0g://` URI.
+  - **0G Compute:** When the seller returns a bulk price quote, the coordinator delegates the accept/reject decision to `qwen/qwen-2.5-7b-instruct` running on the 0G Compute Marketplace — an autonomous AI-to-AI negotiation.
+  - **0G iNFT (ERC-7857):** Each buyer agent mints a `BuyerProfile` iNFT on 0G Testnet at init time. After successfully funding a coalition, the agent seals the outcome into the iNFT via `sealInference()`, creating a verifiable, on-chain record of every deal the agent has ever participated in. The iNFT address is `0x53764E22f4976D5cC824FaE00BADB792D942EE71` on 0G Testnet.
+
+- **KeeperHub Automation:** Rather than requiring a human to trigger the final `commit()`, Huddle registers a KeeperHub workflow that monitors each Coalition contract. When the funding threshold is met, KeeperHub's cloud infrastructure autonomously calls `commit()`, atomically transferring MockUSDC to the seller — zero human intervention from intent to settlement.
+
+- **X402 Micropayments:** Price discovery between the coordinator agent and the seller agent is gated by an X402 payment flow. Before receiving the bulk tier price, the coordinator autonomously sends a 0.01 MockUSDC on-chain payment to the seller's treasury. The seller verifies the Transfer event on-chain before returning the quote — a real machine-to-machine micropayment protocol.
+
+- **AI x Crypto:** Huddle is a foundational primitive for the Agent Economy, proving that AI agents can collaboratively discover peers, negotiate prices via micropayments, pool capital into trustless escrow, and settle autonomously — without any human intervention at any step.
 
 ---
