@@ -56,6 +56,7 @@ export type CoalitionReadyEnv = {
   commitment: string;
   coalition_address: `0x${string}`;
   chain_id: number;
+  tier_unit_price?: number;
 };
 
 export type Envelope =

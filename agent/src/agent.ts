@@ -598,6 +598,7 @@ export class HuddleAgent {
         commitment: env.commitment,
         coalition_address: coalitionAddress,
         chain_id: this.onchain.chainId,
+        tier_unit_price: cluster.offer?.tierUnitPrice,
       };
 
       if (this.gossip) {
@@ -673,6 +674,9 @@ export class HuddleAgent {
     cluster.coordinator = env.from;
 
     cluster.coalitionAddress = env.coalition_address;
+    if (env.tier_unit_price != null && !cluster.offer) {
+      cluster.offer = { tierUnitPrice: env.tier_unit_price, validUntilMs: Date.now() + 30 * 60 * 1000 };
+    }
     this.log(`coalition_ready c=${short(env.commitment)} addr=${env.coalition_address} chain=${env.chain_id}`);
     await this.maybeFundCoalition(env.commitment, env.coalition_address);
   }
