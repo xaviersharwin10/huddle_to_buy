@@ -53,6 +53,12 @@ PUBKEY_C=$(get_pubkey 9022)
 PUBKEY_S=$(get_pubkey 9032)
 KNOWN_PEERS="$PUBKEY_A,$PUBKEY_B,$PUBKEY_C,$PUBKEY_S"
 
+# HTTP peer maps — GossipSub uses these instead of AXL Yggdrasil transport,
+# which doesn't route between localhost nodes in a single-container deploy.
+PEER_HTTP_MAP_1="${PUBKEY_B}=http://127.0.0.1:3002,${PUBKEY_C}=http://127.0.0.1:3003"
+PEER_HTTP_MAP_2="${PUBKEY_A}=http://127.0.0.1:3001,${PUBKEY_C}=http://127.0.0.1:3003"
+PEER_HTTP_MAP_3="${PUBKEY_A}=http://127.0.0.1:3001,${PUBKEY_B}=http://127.0.0.1:3002"
+
 echo "  SELLER_PEER_ID = ${PUBKEY_S:0:16}..."
 echo "  KNOWN_PEERS    = ${KNOWN_PEERS:0:36}..."
 
@@ -77,13 +83,14 @@ echo "  seller started → $LOGS/seller.log"
 echo ""
 echo "=== [4/6] Starting 3 buyer agents (ports 3001-3003) ==="
 
-# FIX #2: plain function instead of declare -A associative arrays
 start_buyer() {
   local N=$1
   local AXL_PORT=$2
   local AGENT_PORT=$3
   local PK_VAR="BUYER${N}_PRIVATE_KEY"
   local BUYER_PK="${!PK_VAR:-}"
+  local PEER_MAP_VAR="PEER_HTTP_MAP_${N}"
+  local PEER_MAP="${!PEER_MAP_VAR}"
 
   (
     cd "$ROOT/agent"
@@ -94,6 +101,7 @@ start_buyer() {
       KNOWN_PEERS="$KNOWN_PEERS" \
       SELLER_PEER_ID="$PUBKEY_S" \
       SELLER_API="http://127.0.0.1:3004" \
+      PEER_HTTP_MAP="$PEER_MAP" \
       FACTORY_ADDRESS="${FACTORY_ADDRESS:-}" \
       PAY_TOKEN_ADDRESS="${PAY_TOKEN_ADDRESS:-}" \
       KEEPER_ADDRESS="${KEEPER_ADDRESS:-}" \

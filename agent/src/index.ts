@@ -18,6 +18,14 @@ const KNOWN_PEERS = (process.env.KNOWN_PEERS ?? "")
   .map((s) => s.trim())
   .filter((s) => s.length === 64);
 
+// PEER_HTTP_MAP: "pubkey1=http://127.0.0.1:3002,pubkey2=http://127.0.0.1:3003"
+// Enables HTTP-based peer messaging, bypassing AXL Yggdrasil transport.
+const PEER_HTTP_MAP = new Map<string, string>();
+for (const pair of (process.env.PEER_HTTP_MAP ?? "").split(",")) {
+  const eq = pair.indexOf("=");
+  if (eq > 0) PEER_HTTP_MAP.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+}
+
 const help = `huddle-agent
 
 env:
@@ -75,6 +83,7 @@ async function main() {
         sellerPeerId: SELLER_PEER_ID,
         sellerApi: SELLER_API,
         knownPeers: KNOWN_PEERS.length > 0 ? KNOWN_PEERS : null,
+        peerUrlMap: PEER_HTTP_MAP.size > 0 ? PEER_HTTP_MAP : undefined,
         autoFund: AUTO_FUND,
         fundDelayMs: FUND_DELAY_MS,
       });
@@ -119,6 +128,18 @@ async function main() {
                 res.writeHead(400);
                 res.end(JSON.stringify({ error: (e as Error).toString() }));
              }
+          });
+          return;
+        }
+
+        if (req.method === "POST" && req.url === "/peer-msg") {
+          const from = (req.headers["x-from-peer-id"] as string) ?? "";
+          const chunks: Buffer[] = [];
+          req.on("data", (chunk: Buffer) => chunks.push(chunk));
+          req.on("end", async () => {
+            await agent.injectPeerMessage(Buffer.concat(chunks), from);
+            res.writeHead(200);
+            res.end();
           });
           return;
         }

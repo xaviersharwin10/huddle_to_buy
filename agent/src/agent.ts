@@ -58,6 +58,10 @@ export type HuddleAgentOptions = {
   sellerApi?: string | null;
   /** Optional override for broadcast peers. If null, falls back to /topology.tree. */
   knownPeers?: string[] | null;
+  /** Map of peer pubkey → HTTP base URL for direct HTTP peer messaging.
+   *  When set, GossipSub sends go via HTTP POST /peer-msg instead of axl.send(),
+   *  bypassing the Yggdrasil transport which doesn't work in single-container Railway. */
+  peerUrlMap?: Map<string, string>;
   onchain?: OnchainConfig | null;
   autoFund?: boolean;
   fundDelayMs?: number;
@@ -83,12 +87,14 @@ export class HuddleAgent {
   private readonly autoFund: boolean;
   private readonly fundDelayMs: number;
   private readonly log: Logger;
+  private readonly peerUrlMap: Map<string, string>;
 
   constructor(private readonly axl: AxlClient, opts: HuddleAgentOptions = {}) {
     this.k = opts.k ?? 3;
     this.sellerPeerId = opts.sellerPeerId ?? null;
     this.sellerApi = opts.sellerApi ?? null;
     this.knownPeers = opts.knownPeers ?? null;
+    this.peerUrlMap = opts.peerUrlMap ?? new Map();
     this.onchain = opts.onchain ?? createOnchainConfigFromEnv();
     this.zeroGProfile = createZeroGProfileConfigFromEnv();
     this.zeroGStorage = createZeroGStorageConfigFromEnv();
@@ -96,6 +102,15 @@ export class HuddleAgent {
     this.fundDelayMs = opts.fundDelayMs ?? 0;
     this.log = opts.log ?? console.log;
     this.observer = new IntentObserver(24 * 60 * 60 * 1000, this.k);
+  }
+
+  /** Called by the HTTP server when a peer POSTs to /peer-msg. */
+  public async injectPeerMessage(body: Buffer, from: string): Promise<void> {
+    if (this.gossip) {
+      const isGossip = await this.gossip.handle_raw(from, body);
+      if (isGossip) return;
+    }
+    await this.handleEnvelopeBuffer(body, from);
   }
 
   private async broadcastPeers(): Promise<string[]> {
@@ -116,7 +131,20 @@ export class HuddleAgent {
       DEFAULT_GOSSIP_CONFIG,
       this.myPeerId,
       async (dest: string, data: string) => {
-        try { await this.axl.send(dest, data); } catch (e) {}
+        // Prefer HTTP peer send (bypasses Yggdrasil which doesn't work in
+        // single-container deployments); fall back to AXL for local dev.
+        const url = this.peerUrlMap.get(dest);
+        if (url) {
+          try {
+            await fetch(`${url}/peer-msg`, {
+              method: "POST",
+              headers: { "x-from-peer-id": this.myPeerId, "content-type": "application/json" },
+              body: data,
+            });
+            return;
+          } catch {}
+        }
+        try { await this.axl.send(dest, data); } catch {}
       },
       async (topic: string, data: Buffer) => {
         if (topic === "huddle") {
@@ -239,19 +267,11 @@ export class HuddleAgent {
     if (this.gossip) {
        await this.gossip.publish("huddle", body);
        this.log(`  -> commit published via GossipSub to c=${short(c)}`);
-    }
-
-    // Always direct-send to all known peers as a reliability fallback.
-    // GossipSub mcache TTL means a commit published by an early buyer may
-    // have already left the IHAVE window by the time later buyers subscribe —
-    // direct AXL sends guarantee delivery regardless of timing.
-    const peers = await this.broadcastPeers();
-    for (const p of peers) {
-      try {
-        await this.axl.send(p, JSON.stringify(env));
-        this.log(`  -> commit direct-sent to ${short(p)}`);
-      } catch (e) {
-        this.log(`  ! commit direct-send to ${short(p)} failed: ${(e as Error).message}`);
+    } else {
+      const peers = await this.broadcastPeers();
+      for (const p of peers) {
+        try { await this.axl.send(p, JSON.stringify(env)); this.log(`  -> commit to ${short(p)}`); }
+        catch (e) { this.log(`  ! commit to ${short(p)} failed: ${(e as Error).message}`); }
       }
     }
     return c;
