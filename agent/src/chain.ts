@@ -375,7 +375,7 @@ export async function mintBuyerProfile0G(
 
   const account = privateKeyToAccount(cfg.privateKey);
   const wallet = createWalletClient({ account, chain, transport: http(cfg.rpcUrl) });
-  const publicClient = createPublicClient({ chain, transport: http(cfg.rpcUrl) });
+  const publicClient = createPublicClient({ chain, transport: http(cfg.rpcUrl), pollingInterval: 5_000 });
 
   const hash = await wallet.writeContract({
     address: cfg.buyerProfileAddress,
@@ -384,7 +384,8 @@ export async function mintBuyerProfile0G(
     args: [storageUri],
     gas: 300_000n,
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  // 0G testnet is slow — give it up to 3 minutes to include the tx.
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 180_000 });
 
   for (const log of receipt.logs) {
     try {
@@ -417,7 +418,7 @@ export async function sealCoalitionInference(args: {
 
   const account = privateKeyToAccount(cfg.privateKey);
   const wallet = createWalletClient({ account, chain, transport: http(cfg.rpcUrl) });
-  const publicClient = createPublicClient({ chain, transport: http(cfg.rpcUrl) });
+  const publicClient = createPublicClient({ chain, transport: http(cfg.rpcUrl), pollingInterval: 5_000 });
 
   // deterministic fingerprint: keccak256 of "<coalitionAddress>:<sku>"
   const inferenceHash = keccak256(toHex(`${coalitionAddress}:${sku}`));
@@ -429,7 +430,7 @@ export async function sealCoalitionInference(args: {
     args: [tokenId, inferenceHash],
     gas: 150_000n,
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  await publicClient.waitForTransactionReceipt({ hash, timeout: 180_000 });
   return hash;
 }
 
