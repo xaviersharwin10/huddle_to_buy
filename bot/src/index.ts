@@ -219,6 +219,17 @@ Message: "${text}"`;
   try {
     await submitIntent(agentPort, intent);
     if (!lastStatusMap[chatId]) lastStatusMap[chatId] = {};
+    // Pre-seed all current commit statuses so stale settled coalitions
+    // from previous runs don't fire false "Purchase Complete" notifications.
+    try {
+      const snap = await fetch(`http://127.0.0.1:${agentPort}/status`);
+      if (snap.ok) {
+        const snapData = await snap.json();
+        for (const c of (snapData.myCommits || [])) {
+          lastStatusMap[chatId][c.commitment] = c.statusStr;
+        }
+      }
+    } catch {}
   } catch (error) {
     const errMsg = (error as Error).message;
     const isOffline = errMsg.includes("ECONNREFUSED") || errMsg.includes("fetch failed");
