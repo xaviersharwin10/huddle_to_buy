@@ -60,7 +60,24 @@ declare -A PORTS=(
   [nodeS]=9032
 )
 
-echo "[start-nodes] Starting 4 AXL nodes..."
+echo "[start-nodes] Starting 4 AXL nodes (waiting for each before starting next)..."
+
+wait_for_node() {
+  local NODE=$1
+  local PORT=$2
+  local DEADLINE=$(($(date +%s) + 30))
+  until curl -sf "http://127.0.0.1:$PORT/topology" > /dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+      echo "  TIMEOUT: $NODE (:$PORT) did not respond in 30s"
+      echo "  Check: $LOGS/axl-$NODE.log"
+      exit 1
+    fi
+    sleep 0.5
+  done
+  local PUBKEY
+  PUBKEY=$(curl -sf "http://127.0.0.1:$PORT/topology" | python3 -c "import sys,json; print(json.load(sys.stdin)['our_public_key'])")
+  echo "  ✓ $NODE :$PORT  pubkey=${PUBKEY:0:16}..."
+}
 
 for NODE in nodeA nodeB nodeC nodeS; do
   PORT="${PORTS[$NODE]}"
@@ -78,30 +95,10 @@ for NODE in nodeA nodeB nodeC nodeS; do
     exec "$BIN" -config node-config.json
   ) >> "$LOGFILE" 2>&1 &
   disown
-  sleep 0.3
-done
 
-# ── Wait for all 4 to come up ─────────────────────────────────────────────────
-echo ""
-echo "[start-nodes] Waiting for all 4 nodes to respond (up to 30s)..."
-
-ALL_PORTS=(9002 9012 9022 9032)
-ALL_NODES=(nodeA nodeB nodeC nodeS)
-DEADLINE=$(($(date +%s) + 30))
-
-for i in "${!ALL_PORTS[@]}"; do
-  PORT="${ALL_PORTS[$i]}"
-  NODE="${ALL_NODES[$i]}"
-  until curl -sf "http://127.0.0.1:$PORT/topology" > /dev/null 2>&1; do
-    if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-      echo "  TIMEOUT: $NODE (:$PORT) did not respond in 30s"
-      echo "  Check: $LOGS/axl-$NODE.log"
-      exit 1
-    fi
-    sleep 0.5
-  done
-  PUBKEY=$(curl -sf "http://127.0.0.1:$PORT/topology" | python3 -c "import sys,json; print(json.load(sys.stdin)['our_public_key'])")
-  echo "  ✓ $NODE :$PORT  pubkey=${PUBKEY:0:16}..."
+  # Wait for this node to be API-ready before starting the next one.
+  # nodeC connects to nodeB (full-mesh), so nodeB must be fully up first.
+  wait_for_node "$NODE" "$PORT"
 done
 
 echo ""

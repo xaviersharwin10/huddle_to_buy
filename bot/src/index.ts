@@ -58,6 +58,16 @@ if (TELEGRAM_BOT_TOKEN === "mock_token") {
   console.log("Telegram bot polling started!");
 }
 
+// Graceful shutdown: stop polling before process exits so a redeploying
+// container doesn't produce a 409 Conflict on the new instance.
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received — stopping Telegram polling...");
+  bot.stopPolling().finally(() => process.exit(0));
+});
+process.on("SIGINT", () => {
+  bot.stopPolling().finally(() => process.exit(0));
+});
+
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
 

@@ -23,8 +23,8 @@ RUN cd axl && \
     openssl genpkey -algorithm ed25519 -out data/nodeC/private.pem && \
     openssl genpkey -algorithm ed25519 -out data/nodeS/private.pem && \
     echo '{"PrivateKeyPath":"private.pem","Peers":[],"Listen":["tls://127.0.0.1:9001"],"tcp_port":7000,"api_port":9002,"bridge_addr":"127.0.0.1"}' > data/nodeA/node-config.json && \
-    echo '{"PrivateKeyPath":"private.pem","Peers":["tls://127.0.0.1:9001"],"Listen":[],"tcp_port":7001,"api_port":9012,"bridge_addr":"127.0.0.1"}' > data/nodeB/node-config.json && \
-    echo '{"PrivateKeyPath":"private.pem","Peers":["tls://127.0.0.1:9001"],"Listen":[],"tcp_port":7002,"api_port":9022,"bridge_addr":"127.0.0.1"}' > data/nodeC/node-config.json && \
+    echo '{"PrivateKeyPath":"private.pem","Peers":["tls://127.0.0.1:9001"],"Listen":["tls://127.0.0.1:9011"],"tcp_port":7001,"api_port":9012,"bridge_addr":"127.0.0.1"}' > data/nodeB/node-config.json && \
+    echo '{"PrivateKeyPath":"private.pem","Peers":["tls://127.0.0.1:9001","tls://127.0.0.1:9011"],"Listen":[],"tcp_port":7002,"api_port":9022,"bridge_addr":"127.0.0.1"}' > data/nodeC/node-config.json && \
     echo '{"PrivateKeyPath":"private.pem","Peers":["tls://127.0.0.1:9001"],"Listen":[],"tcp_port":7003,"api_port":9032,"bridge_addr":"127.0.0.1"}' > data/nodeS/node-config.json
 
 # Install monorepo dependencies (agent + bot; contracts not needed at runtime)
