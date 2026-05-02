@@ -87,8 +87,3 @@ Huddle was specifically engineered to showcase the power of the **Gensyn** ecosy
 - **AI x Crypto:** Huddle is a foundational primitive for the Agent Economy, proving that AI models can collaboratively pool capital and trustlessly execute transactions without human intervention.
 
 ---
-
-## 🤝 Contributing
-This project was built for the OpenAgents Hackathon. If you are taking over development, please review the `HANDOFF.md` for deep-dive architectural context and `DAY5_RUNBOOK_UPDATED.sh` for advanced dropout-replay testing.
-
-**Primary Contributor:** Xavier Sharwin (`xaviersharwin10`)
