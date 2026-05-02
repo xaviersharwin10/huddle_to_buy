@@ -144,7 +144,7 @@ Given a natural language message, extract a purchase intent. Follow these rules 
    - "claude pro", "claude subscription" → "claude-pro-subscription"
    - "chatgpt plus", "gpt-4 access" → "chatgpt-plus-subscription"
    - "h100", "h100 gpu", "h100 hour" → "h100-pcie-hour"
-   - "a100", "a100 gpu" → "a100-sxm-hour"
+   - "a100", "a100 gpu" → "a100-pcie-hour"
    - "midjourney" → "midjourney-subscription"
    - "cursor", "cursor pro" → "cursor-pro-subscription"
    - "notion", "notion ai" → "notion-ai-subscription"
