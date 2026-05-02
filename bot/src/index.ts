@@ -297,7 +297,7 @@ setInterval(async () => {
       const commits = data.myCommits || [];
 
       for (const commit of commits) {
-        const { commitment, sku, qty, max_unit_price, statusStr, clusterSize, offer, address } = commit;
+        const { commitment, sku, qty, max_unit_price, statusStr, clusterSize, offer, address, x402TxHash, fundTx, zeroGSealTx } = commit;
         const prevStatus = userTracked[commitment] || "";
 
         if (prevStatus !== statusStr) {
@@ -334,9 +334,25 @@ setInterval(async () => {
             const discount = max_unit_price - (offer?.tierUnitPrice || max_unit_price);
             const totalSaved = discount * qty;
 
+            const explorerBase = "https://gensyn-testnet.explorer.alchemy.com";
+            const shortTx = (tx: string) => tx.slice(0, 10) + "…" + tx.slice(-6);
+
+            const techLines: string[] = [
+              `\n🔬 *Powered by:*`,
+              `• *AXL (Gensyn)*: P2P gossip mesh — ${clusterSize} buyers formed coalition`,
+              x402TxHash
+                ? `• *X402*: 0.01 MockUSDC micro-payment to seller → [${shortTx(x402TxHash)}](${explorerBase}/tx/${x402TxHash})`
+                : `• *X402*: price discovery via GossipSub`,
+              `• *0G Compute*: AI agent accepted the bulk offer`,
+              zeroGSealTx
+                ? `• *0G iNFT*: coalition outcome sealed on 0G Testnet → [${shortTx(zeroGSealTx)}](https://chainscan-galileo.0g.ai/tx/${zeroGSealTx})`
+                : `• *0G iNFT*: buyer profile minted on 0G Testnet`,
+              `• *KeeperHub*: autonomous commit() trigger queued`,
+            ];
+
             bot.sendMessage(
               chatId,
-              `✅ **Purchase Complete!**\n\nItem: ${sku} (Qty: ${qty})\nOriginal Price Target: $${max_unit_price.toFixed(2)}\nBulk Discount Achieved: $${offer?.tierUnitPrice?.toFixed(2) || "N/A"}\nTotal Saved: $${totalSaved.toFixed(2)}\n\n🔗 Gensyn Testnet Tx: [View on Explorer](https://gensyn-testnet.explorer.alchemy.com/address/${address})`,
+              `✅ **Purchase Complete!**\n\nItem: ${sku} (Qty: ${qty})\nOriginal Price: $${max_unit_price.toFixed(2)}\nBulk Price: $${offer?.tierUnitPrice?.toFixed(2) || "N/A"}\nTotal Saved: $${totalSaved.toFixed(2)}\n\n🔗 [Coalition Contract](${explorerBase}/address/${address})` + techLines.join("\n"),
               { parse_mode: "Markdown", disable_web_page_preview: true }
             );
           }

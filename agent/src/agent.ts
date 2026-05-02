@@ -43,6 +43,10 @@ export type ClusterState = {
   fundedByMe?: boolean;
   declinedReason?: string;
   fallbackTimer?: ReturnType<typeof setTimeout>;
+  // Tech-stack proof hashes (surfaced to UI for judge demo):
+  x402TxHash?: string;
+  fundTx?: string;
+  zeroGSealTx?: string;
 };
 
 type Logger = (s: string) => void;
@@ -195,7 +199,10 @@ export class HuddleAgent {
          statusStr: statusString,
          clusterSize: cluster ? cluster.members.size : 1,
          offer: cluster?.offer,
-         address: cluster?.coalitionAddress || null
+         address: cluster?.coalitionAddress || null,
+         x402TxHash: cluster?.x402TxHash || null,
+         fundTx: cluster?.fundTx || null,
+         zeroGSealTx: cluster?.zeroGSealTx || null,
       });
     }
     return {
@@ -485,6 +492,7 @@ export class HuddleAgent {
         recipientAddress: accept.payTo as `0x${string}`,
       });
       this.log(`x402: payment confirmed txHash=${txHash}`);
+      cluster.x402TxHash = txHash;
 
       // ── Step 3: retry with X-Payment proof ───────────────────────────────
       const xPayment = Buffer.from(
@@ -712,6 +720,7 @@ export class HuddleAgent {
       }
       this.log(`fund: success tx=${fundTx}`);
       cluster.fundedByMe = true;
+      cluster.fundTx = fundTx;
 
       // Seal the coalition outcome into the buyer's 0G iNFT (best-effort).
       const sample = [...cluster.members.values()][0];
@@ -724,6 +733,7 @@ export class HuddleAgent {
             sku: sample.sku,
           });
           this.log(`0G iNFT: sealInference tx=${sealTx} tokenId=${this.myTokenId} coalition=${coalitionAddress}`);
+          cluster.zeroGSealTx = sealTx;
         } catch (e) {
           this.log(`0G iNFT sealInference failed: ${(e as Error).message}`);
         }
