@@ -291,6 +291,7 @@ setInterval(async () => {
 
         if (prevStatus !== statusStr) {
           userTracked[commitment] = statusStr;
+          console.log(`[status] chat=${chatId} sku=${sku} ${prevStatus || "—"} → ${statusStr}`);
 
           if (statusStr === "Broadcasting Intent") {
             // Let UI handle it natively
@@ -334,4 +335,4 @@ setInterval(async () => {
       // Agent daemon not running yet — silently skip
     }
   }
-}, 5000);
+}, 1500);
