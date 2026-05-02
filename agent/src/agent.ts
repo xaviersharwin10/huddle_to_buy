@@ -224,15 +224,19 @@ export class HuddleAgent {
     if (this.gossip) {
        await this.gossip.publish("huddle", body);
        this.log(`  -> commit published via GossipSub to c=${short(c)}`);
-    } else {
-      const peers = await this.broadcastPeers();
-      for (const p of peers) {
-        try {
-          await this.axl.send(p, JSON.stringify(env));
-          this.log(`  -> commit to ${short(p)}`);
-        } catch (e) {
-          this.log(`  ! commit to ${short(p)} failed: ${(e as Error).message}`);
-        }
+    }
+
+    // Always direct-send to all known peers as a reliability fallback.
+    // GossipSub mcache TTL means a commit published by an early buyer may
+    // have already left the IHAVE window by the time later buyers subscribe —
+    // direct AXL sends guarantee delivery regardless of timing.
+    const peers = await this.broadcastPeers();
+    for (const p of peers) {
+      try {
+        await this.axl.send(p, JSON.stringify(env));
+        this.log(`  -> commit direct-sent to ${short(p)}`);
+      } catch (e) {
+        this.log(`  ! commit direct-send to ${short(p)} failed: ${(e as Error).message}`);
       }
     }
     return c;
