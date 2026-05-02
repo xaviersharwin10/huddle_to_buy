@@ -290,16 +290,18 @@ export class GossipSub {
 
     const mesh = this.mesh.get(topic) || new Set();
     const non_mesh = Array.from(this.peers).filter(p => !mesh.has(p));
-    if (non_mesh.length === 0) return;
+    // In small hub-spoke networks all peers end up in mesh; fall back to mesh peers
+    const targets = non_mesh.length > 0 ? non_mesh : Array.from(mesh);
+    if (targets.length === 0) return;
 
-    const num = Math.min(this.config.D_gossip, non_mesh.length);
-    const sampled = this.shuffle(non_mesh).slice(0, num);
+    const num = Math.min(this.config.D_gossip, targets.length);
+    const sampled = this.shuffle(targets).slice(0, num);
 
     for (const peer of sampled) {
       this._send(peer, {
         type: "gossipsub",
         msg_type: "IHAVE",
-        topic: topic,
+        topic,
         msg_ids: recent,
       }).catch(() => {});
     }

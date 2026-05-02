@@ -166,12 +166,15 @@ echo "Running keeper → commit()..."
 echo "  Contract: $COALITION_ADDRESS"
 
 # Load contracts/.env for PRIVATE_KEY / KEEPER_PRIVATE_KEY if not already set
+# Save coalition address first — source may overwrite it with a stale value from .env
+_NEW_COALITION="$COALITION_ADDRESS"
 if [ -f "$CONTRACT_DIR/.env" ]; then
   set -o allexport
   # shellcheck disable=SC1090,SC1091
   source "$CONTRACT_DIR/.env"
   set +o allexport
 fi
+COALITION_ADDRESS="$_NEW_COALITION"
 
 (
   cd "$CONTRACT_DIR"
