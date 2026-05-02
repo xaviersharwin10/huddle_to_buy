@@ -119,6 +119,13 @@ const BUYER_PROFILE_ABI = [
   },
   {
     type: "function",
+    name: "ownerOf",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
     name: "mintProfile",
     stateMutability: "nonpayable",
     inputs: [{ name: "storageUri", type: "string" }],
@@ -370,7 +377,7 @@ export async function fundCoalitionForBuyer(args: {
 export async function mintBuyerProfile0G(
   cfg: ZeroGProfileConfig | null,
   storageUri: string,
-): Promise<{ txHash: `0x${string}`; tokenId: bigint } | null> {
+): Promise<{ txHash: `0x${string}` | null; tokenId: bigint } | null> {
   if (!cfg) return null;
 
   const chain = defineChain({
@@ -393,7 +400,23 @@ export async function mintBuyerProfile0G(
     args: [account.address],
   });
   if (balance > 0n) {
-    return null; // caller logs "already minted"
+    // Find the first tokenId owned by this address so sealInference can run.
+    for (let id = 0n; id < 50n; id++) {
+      try {
+        const owner = await publicClient.readContract({
+          address: cfg.buyerProfileAddress,
+          abi: BUYER_PROFILE_ABI,
+          functionName: "ownerOf",
+          args: [id],
+        });
+        if ((owner as string).toLowerCase() === account.address.toLowerCase()) {
+          return { txHash: null, tokenId: id };
+        }
+      } catch {
+        break; // token doesn't exist — stop scanning
+      }
+    }
+    return null;
   }
 
   const hash = await wallet.writeContract({

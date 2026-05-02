@@ -177,9 +177,13 @@ export class HuddleAgent {
         const result = await mintBuyerProfile0G(this.zeroGProfile, storageUri);
         if (result) {
           this.myTokenId = result.tokenId;
-          this.log(`0G iNFT: mintProfile tx=${result.txHash} tokenId=${result.tokenId} uri=${storageUri}`);
+          if (result.txHash) {
+            this.log(`0G iNFT: mintProfile tx=${result.txHash} tokenId=${result.tokenId} uri=${storageUri}`);
+          } else {
+            this.log(`0G iNFT: using existing profile tokenId=${result.tokenId} (already minted)`);
+          }
         } else {
-          this.log("0G iNFT: profile already minted for this address — skipping");
+          this.log("0G iNFT: skipped (no profile found for this address)");
         }
       } catch (e) {
         this.log(`0G iNFT mint failed: ${(e as Error).message}`);
