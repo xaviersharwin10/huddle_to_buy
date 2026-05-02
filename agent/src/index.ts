@@ -4,6 +4,9 @@ import type { Intent } from "./intent.js";
 import { SellerAgent } from "./seller.js";
 import { createSellerChainConfigFromEnv } from "./chain.js";
 
+// ethers v6 uses BigInt for gas/nonce; teach JSON.stringify to serialize them as strings
+(BigInt.prototype as any).toJSON = function () { return this.toString(); };
+
 const AXL = process.env.AXL_API ?? "http://127.0.0.1:9002";
 const K = Number(process.env.K ?? "3");
 const SELLER_PEER_ID = process.env.SELLER_PEER_ID ?? null;
