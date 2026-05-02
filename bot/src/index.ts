@@ -68,6 +68,23 @@ process.on("SIGINT", () => {
   bot.stopPolling().finally(() => process.exit(0));
 });
 
+// 409 Conflict = old container is still polling. Stop, wait 30s for it to
+// die, then restart. Any other polling error is logged and ignored.
+let recovering409 = false;
+bot.on("polling_error", (err: any) => {
+  if (err?.message?.includes("409") && !recovering409) {
+    recovering409 = true;
+    console.log("409 conflict — waiting 30s for old instance to stop...");
+    bot.stopPolling().then(() => {
+      setTimeout(() => {
+        recovering409 = false;
+        console.log("Restarting Telegram polling after 409 backoff...");
+        bot.startPolling();
+      }, 30_000);
+    }).catch(() => {});
+  }
+});
+
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
 
