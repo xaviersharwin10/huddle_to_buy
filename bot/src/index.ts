@@ -294,6 +294,17 @@ setInterval(async () => {
 
           if (statusStr === "Broadcasting Intent") {
             // Let UI handle it natively
+          } else if (statusStr.startsWith("Declined:")) {
+            const reason = statusStr.replace("Declined:", "").trim();
+            let msg: string;
+            if (reason === "sku_not_offered") {
+              msg = `❌ The seller doesn't carry *${sku}*. Try asking for GPU compute instead:\n\n• _I want 5 hours of H100 GPU_\n• _Get me an A100 for 2 hours_`;
+            } else if (reason === "tier_above_max") {
+              msg = `❌ The bulk price for *${sku}* ($${offer?.tierUnitPrice}/unit) is above your max $${max_unit_price}/unit. Try raising your budget or wait for more buyers to unlock a deeper tier.`;
+            } else {
+              msg = `❌ Seller declined *${sku}*: ${reason}`;
+            }
+            bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
           } else if (statusStr === "Negotiating Tier Price") {
             bot.sendMessage(chatId, `🤖 I found ${clusterSize} peers on the AXL mesh! Forming a coalition...`);
           } else if (statusStr === "Tier Offer Received") {

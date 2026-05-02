@@ -41,6 +41,7 @@ export type ClusterState = {
   offer?: { tierUnitPrice: number; validUntilMs: number };
   coalitionAddress?: `0x${string}`;
   fundedByMe?: boolean;
+  declinedReason?: string;
   fallbackTimer?: ReturnType<typeof setTimeout>;
 };
 
@@ -183,6 +184,7 @@ export class HuddleAgent {
          if (cluster.offer) statusString = "Tier Offer Received";
          if (cluster.coalitionAddress) statusString = "Deploying Coalition";
          if (cluster.fundedByMe) statusString = "Settled (commit ready)";
+         if (cluster.declinedReason) statusString = `Declined: ${cluster.declinedReason}`;
       }
       statuses.push({
          commitment: short(c),
@@ -499,6 +501,7 @@ export class HuddleAgent {
       const quote = (await res2.json()) as any;
       if (quote.decline_reason) {
         this.log(`x402: seller declined: ${quote.decline_reason}`);
+        cluster.declinedReason = quote.decline_reason;
         return false;
       }
 
@@ -547,6 +550,7 @@ export class HuddleAgent {
     }
     if (env.decline_reason) {
       this.log(`*** SELLER DECLINED c=${short(env.commitment)}: ${env.decline_reason} ***`);
+      cluster.declinedReason = env.decline_reason;
       return;
     }
     if (env.tier_unit_price == null || env.valid_until_ms == null) {

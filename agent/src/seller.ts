@@ -25,6 +25,31 @@ const TIER_CARD: Record<string, Tier[]> = {
     { minBuyers: 3,  unitPrice: 0.95 },
     { minBuyers: 10, unitPrice: 0.80 },
   ],
+  "claude-pro-subscription": [
+    { minBuyers: 1,  unitPrice: 20.00 },
+    { minBuyers: 3,  unitPrice: 17.00 },
+    { minBuyers: 10, unitPrice: 14.00 },
+  ],
+  "chatgpt-plus-subscription": [
+    { minBuyers: 1,  unitPrice: 20.00 },
+    { minBuyers: 3,  unitPrice: 17.00 },
+    { minBuyers: 10, unitPrice: 14.00 },
+  ],
+  "midjourney-subscription": [
+    { minBuyers: 1,  unitPrice: 10.00 },
+    { minBuyers: 3,  unitPrice: 8.50 },
+    { minBuyers: 10, unitPrice: 7.00 },
+  ],
+  "cursor-pro-subscription": [
+    { minBuyers: 1,  unitPrice: 20.00 },
+    { minBuyers: 3,  unitPrice: 16.00 },
+    { minBuyers: 10, unitPrice: 13.00 },
+  ],
+  "notion-ai-subscription": [
+    { minBuyers: 1,  unitPrice: 10.00 },
+    { minBuyers: 3,  unitPrice: 8.50 },
+    { minBuyers: 10, unitPrice: 7.00 },
+  ],
 };
 
 function pickTierPrice(sku: string, nBuyers: number): number | null {
