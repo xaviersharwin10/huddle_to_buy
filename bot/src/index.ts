@@ -136,12 +136,52 @@ bot.on("message", async (msg) => {
 
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-    const prompt = `You are an intent parser. Extract the SKU (product name), max price, and quantity from the following user message. Return ONLY a valid JSON object with the keys "sku", "maxPrice", and "qty", and absolutely no markdown formatting, text, or backticks around it. If values are missing or invalid, do your best to infer or return a clear error in JSON.
-    Message: "${text}"`;
+    const prompt = `You are a purchasing intent parser for an AI agent coalition marketplace.
+
+Given a natural language message, extract a purchase intent. Follow these rules strictly:
+
+1. sku: A lowercase kebab-case product slug. Map common products:
+   - "claude pro", "claude subscription" → "claude-pro-subscription"
+   - "chatgpt plus", "gpt-4 access" → "chatgpt-plus-subscription"
+   - "h100", "h100 gpu", "h100 hour" → "h100-pcie-hour"
+   - "a100", "a100 gpu" → "a100-sxm-hour"
+   - "midjourney" → "midjourney-subscription"
+   - "cursor", "cursor pro" → "cursor-pro-subscription"
+   - "notion", "notion ai" → "notion-ai-subscription"
+   - Otherwise: slugify the product name (lowercase, hyphens, no spaces)
+
+2. maxPrice: Maximum price per unit in USD. If the user does not state a price, infer a realistic market rate and add a 15% buffer. Examples:
+   - Claude Pro subscription: $23 (market $20 + buffer)
+   - ChatGPT Plus: $23
+   - H100 per hour: $3.50
+   - A100 per hour: $2.00
+   - Midjourney: $11
+   - Cursor Pro: $22
+   - Notion AI: $11
+
+3. qty: Quantity as an integer. Default to 1 if not stated.
+
+4. If the message is not a purchase intent at all, return: {"error": "not_a_purchase"}
+
+Return ONLY a raw JSON object — no markdown, no backticks, no explanation.
+{"sku": "...", "maxPrice": <number>, "qty": <number>}
+
+Message: "${text}"`;
 
     const result = await model.generateContent(prompt);
-    const responseText = result.response.text().trim().replace(/```json/g, "").replace(/```/g, "");
+    const responseText = result.response.text().trim().replace(/```json/g, "").replace(/```/g, "").trim();
     const parsed = JSON.parse(responseText);
+
+    if (parsed.error === "not_a_purchase") {
+      return bot.sendMessage(
+        chatId,
+        "I'm here to help you buy things as a group! Just tell me what you want, for example:\n\n" +
+        "• _I want a Claude Pro subscription_\n" +
+        "• _Get me 5 hours of H100 GPU time_\n" +
+        "• _Buy Midjourney for 3 people_",
+        { parse_mode: "Markdown" }
+      );
+    }
 
     sku = parsed.sku;
     maxPrice = parseFloat(parsed.maxPrice);
@@ -151,20 +191,15 @@ bot.on("message", async (msg) => {
       throw new Error("Missing or invalid fields in extracted JSON");
     }
   } catch (err) {
-    console.error("Gemini Parsing Error, falling back to Regex:", err);
-    const regex = /buy\s+([a-zA-Z0-9-]+).*?\$([0-9.]+).*?qty\s+([0-9]+)/i;
-    const match = text.match(regex);
-    if (match) {
-      sku = match[1];
-      maxPrice = parseFloat(match[2]);
-      qty = parseInt(match[3], 10);
-    } else {
-      return bot.sendMessage(
-        chatId,
-        "I didn't understand that. Please send an intent like: `I want to buy h100-pcie-hour, max price $1.50, qty 100`",
-        { parse_mode: "Markdown" }
-      );
-    }
+    console.error("Gemini parsing error:", err);
+    return bot.sendMessage(
+      chatId,
+      "I didn't quite catch that. Try something like:\n\n" +
+      "• _I want a Claude Pro subscription_\n" +
+      "• _Get me 5 hours of H100 GPU_\n" +
+      "• _Buy Midjourney for 2 people_",
+      { parse_mode: "Markdown" }
+    );
   }
 
   const agentPort = users[chatId]?.agentPort || 3001;
@@ -177,7 +212,8 @@ bot.on("message", async (msg) => {
 
   bot.sendMessage(
     chatId,
-    `Understood! Submitting Intent:\n📦 SKU: ${sku!}\n💰 Max Price: $${maxPrice!}\n🔢 Qty: ${qty!}\n\nBroadcasting from Agent Node (Port ${agentPort}) to the AXL mesh...`
+    `Got it! Looking for a coalition to buy:\n\n📦 *${sku!}*\n🔢 Qty: ${qty!}\n💰 Max price: $${maxPrice!}/unit\n\n_Broadcasting your intent across the P2P mesh..._`,
+    { parse_mode: "Markdown" }
   );
 
   try {
@@ -193,7 +229,7 @@ bot.on("message", async (msg) => {
       if (!lastStatusMap[chatId]) lastStatusMap[chatId] = {};
       bot.sendMessage(
         chatId,
-        `⏳ Agent node is not running yet. Your intent for **${sku!}** is queued and will broadcast automatically once the node comes online.`,
+        `⏳ Agent node is starting up. Your intent for *${sku!}* is queued and will broadcast automatically once the node is online.`,
         { parse_mode: "Markdown" }
       );
     } else {
