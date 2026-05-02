@@ -1,42 +1,41 @@
 FROM node:20-bookworm
 
-# Install required tools for AXL compilation and python3/curl for bash scripts
+# Tools needed: Go (AXL build), openssl (key gen), python3 + curl (scripts)
 RUN apt-get update && apt-get install -y golang make git openssl jq python3 curl
 
 WORKDIR /app
 
-# Install pnpm globally
 RUN npm install -g pnpm
 
-# Copy the entire workspace
 COPY . .
 
-# IMPORTANT: Remove the embedded submodule to avoid clone issues
-RUN rm -rf axl/upstream && \
-    rm -rf axl/bin/node
+# Remove any local artifacts that must be rebuilt inside the image
+RUN rm -rf axl/upstream axl/bin/node
 
-# Build AXL binary from official source
+# Build AXL P2P binary from official source
 RUN cd axl && \
     git clone --depth 1 https://github.com/gensyn-ai/axl upstream && \
     cd upstream && make build && cd .. && \
     mkdir -p bin && cp upstream/node bin/node && \
     chmod +x bin/node
 
-# Generate required AXL cryptographic keys for the 4 mesh nodes
+# Generate fresh ed25519 keys + node-config.json for all 4 mesh nodes.
+# axl/data/ is gitignored so these must be created at image build time.
 RUN cd axl && \
-    for n in nodeA nodeB nodeC nodeS; do \
-      mkdir -p data/$n && \
-      openssl genpkey -algorithm ed25519 -out data/$n/private.pem; \
-    done
+    mkdir -p data/nodeA data/nodeB data/nodeC data/nodeS && \
+    openssl genpkey -algorithm ed25519 -out data/nodeA/private.pem && \
+    openssl genpkey -algorithm ed25519 -out data/nodeB/private.pem && \
+    openssl genpkey -algorithm ed25519 -out data/nodeC/private.pem && \
+    openssl genpkey -algorithm ed25519 -out data/nodeS/private.pem && \
+    echo '{"PrivateKeyPath":"private.pem","Peers":[],"Listen":["tls://127.0.0.1:9001"],"tcp_port":7000,"api_port":9002,"bridge_addr":"127.0.0.1"}' > data/nodeA/node-config.json && \
+    echo '{"PrivateKeyPath":"private.pem","Peers":["tls://127.0.0.1:9001"],"Listen":[],"tcp_port":7001,"api_port":9012,"bridge_addr":"127.0.0.1"}' > data/nodeB/node-config.json && \
+    echo '{"PrivateKeyPath":"private.pem","Peers":["tls://127.0.0.1:9001"],"Listen":[],"tcp_port":7002,"api_port":9022,"bridge_addr":"127.0.0.1"}' > data/nodeC/node-config.json && \
+    echo '{"PrivateKeyPath":"private.pem","Peers":["tls://127.0.0.1:9001"],"Listen":[],"tcp_port":7003,"api_port":9032,"bridge_addr":"127.0.0.1"}' > data/nodeS/node-config.json
 
-# Install monorepo dependencies
+# Install monorepo dependencies (agent + bot; contracts not needed at runtime)
 RUN pnpm install
 
-# Build the Next.js Web UI
-RUN cd web && pnpm build
+# Railway exposes one port; default 8080 for the health-check server
+EXPOSE 8080
 
-# Railway injects $PORT dynamically, but expose 3000 as default
-EXPOSE 3000
-
-# Start script: Boot the 4 local AXL mesh nodes in the background, then start Next.js
-CMD bash scripts/start-nodes.sh && cd web && pnpm start
+CMD ["bash", "scripts/start-railway.sh"]

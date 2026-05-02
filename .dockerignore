@@ -1,0 +1,29 @@
+# Build artifacts
+node_modules/
+dist/
+build/
+.next/
+
+# Local-only configs and secrets
+.env
+.env.*
+!.env.*.example
+
+# Logs
+logs/
+
+# AXL — upstream source and compiled binary are rebuilt inside the image;
+# axl/data/ is gitignored so it won't be present, but exclude it to be safe
+axl/upstream/
+axl/bin/
+
+# Contract build outputs
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+
+# Git history (large, not needed in build context)
+.git/
+
+# Claude Code internals
+.claude/
