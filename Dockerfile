@@ -1,7 +1,8 @@
 FROM node:20-bookworm
 
-# Tools needed: Go (AXL build), openssl (key gen), python3 + curl (scripts)
-RUN apt-get update && apt-get install -y golang make git openssl jq python3 curl
+# openssl: ed25519 key generation for AXL nodes
+# python3 + curl + jq: used by start-nodes.sh and start-railway.sh
+RUN apt-get update && apt-get install -y openssl python3 curl jq
 
 WORKDIR /app
 
@@ -9,15 +10,9 @@ RUN npm install -g pnpm
 
 COPY . .
 
-# Remove any local artifacts that must be rebuilt inside the image
-RUN rm -rf axl/upstream axl/bin/node
-
-# Build AXL P2P binary from official source
-RUN cd axl && \
-    git clone --depth 1 https://github.com/gensyn-ai/axl upstream && \
-    cd upstream && make build && cd .. && \
-    mkdir -p bin && cp upstream/node bin/node && \
-    chmod +x bin/node
+# axl/bin/node is a committed x86-64 Linux ELF — no Go build needed.
+# Just ensure it's executable and remove stale upstream source if present.
+RUN rm -rf axl/upstream && chmod +x axl/bin/node
 
 # Generate fresh ed25519 keys + node-config.json for all 4 mesh nodes.
 # axl/data/ is gitignored so these must be created at image build time.

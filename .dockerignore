@@ -12,10 +12,9 @@ build/
 # Logs
 logs/
 
-# AXL — upstream source and compiled binary are rebuilt inside the image;
-# axl/data/ is gitignored so it won't be present, but exclude it to be safe
+# AXL — upstream source not needed; binary (axl/bin/node) is a committed
+# x86-64 Linux ELF and is copied directly — no Go build required
 axl/upstream/
-axl/bin/
 
 # Contract build outputs
 contracts/artifacts/

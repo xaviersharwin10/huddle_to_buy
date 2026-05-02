@@ -25,12 +25,26 @@ mkdir -p "$LOGS"
 echo "=== [1/6] Starting AXL mesh nodes ==="
 bash "$ROOT/scripts/start-nodes.sh"
 
-# ── 2. Discover pubkeys ───────────────────────────────────────────────────────
+# FIX #3: give nodes an extra moment to stabilize before querying pubkeys
+sleep 5
+
+# ── 2. Discover pubkeys (with retry) ─────────────────────────────────────────
 echo ""
 echo "=== [2/6] Discovering AXL pubkeys ==="
+
+# Retry up to 15 × 2s = 30s in case a node takes a moment to respond
 get_pubkey() {
-  curl -sf "http://127.0.0.1:$1/topology" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin)['our_public_key'])"
+  local port=$1
+  local result=""
+  local i
+  for i in $(seq 1 15); do
+    result=$(curl -sf "http://127.0.0.1:${port}/topology" 2>/dev/null \
+      | python3 -c "import sys,json; print(json.load(sys.stdin)['our_public_key'])" 2>/dev/null) \
+      && echo "$result" && return 0
+    sleep 2
+  done
+  echo "ERROR: could not get pubkey from port ${port} after 30s" >&2
+  return 1
 }
 
 PUBKEY_A=$(get_pubkey 9002)
@@ -63,18 +77,19 @@ echo "  seller started → $LOGS/seller.log"
 echo ""
 echo "=== [4/6] Starting 3 buyer agents (ports 3001-3003) ==="
 
-declare -A AXL_PORTS=([1]=9002 [2]=9012 [3]=9022)
-declare -A AGENT_PORTS=([1]=3001 [2]=3002 [3]=3003)
-
-for N in 1 2 3; do
-  PK_VAR="BUYER${N}_PRIVATE_KEY"
-  BUYER_PK="${!PK_VAR:-}"
+# FIX #2: plain function instead of declare -A associative arrays
+start_buyer() {
+  local N=$1
+  local AXL_PORT=$2
+  local AGENT_PORT=$3
+  local PK_VAR="BUYER${N}_PRIVATE_KEY"
+  local BUYER_PK="${!PK_VAR:-}"
 
   (
     cd "$ROOT/agent"
     exec env \
-      AXL_API="http://127.0.0.1:${AXL_PORTS[$N]}" \
-      PORT="${AGENT_PORTS[$N]}" \
+      AXL_API="http://127.0.0.1:${AXL_PORT}" \
+      PORT="${AGENT_PORT}" \
       PRIVATE_KEY="$BUYER_PK" \
       KNOWN_PEERS="$KNOWN_PEERS" \
       SELLER_PEER_ID="$PUBKEY_S" \
@@ -99,8 +114,12 @@ for N in 1 2 3; do
   ) >> "$LOGS/buyer${N}.log" 2>&1 &
 
   sleep 0.5
-  echo "  buyer${N} started on port ${AGENT_PORTS[$N]} → $LOGS/buyer${N}.log"
-done
+  echo "  buyer${N} started on port ${AGENT_PORT} → $LOGS/buyer${N}.log"
+}
+
+start_buyer 1 9002 3001
+start_buyer 2 9012 3002
+start_buyer 3 9022 3003
 
 # ── 5. Telegram bot ───────────────────────────────────────────────────────────
 echo ""
