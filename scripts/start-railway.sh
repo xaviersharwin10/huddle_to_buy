@@ -88,6 +88,13 @@ for N in 1 2 3; do
       PAY_TOKEN_DECIMALS="${PAY_TOKEN_DECIMALS:-6}" \
       AUTO_FUND="true" \
       K="3" \
+      BUYER_PROFILE_ADDRESS="${BUYER_PROFILE_ADDRESS:-}" \
+      ZEROG_PRIVATE_KEY="${ZEROG_PRIVATE_KEY:-}" \
+      ZEROG_RPC_URL="${ZEROG_RPC_URL:-https://evmrpc-testnet.0g.ai}" \
+      ZEROG_CHAIN_ID="${ZEROG_CHAIN_ID:-16602}" \
+      ZEROG_FLOW_ADDRESS="${ZEROG_FLOW_ADDRESS:-}" \
+      ZEROG_COMPUTE_URL="${ZEROG_COMPUTE_URL:-}" \
+      ZEROG_COMPUTE_API_KEY="${ZEROG_COMPUTE_API_KEY:-}" \
       pnpm exec tsx src/index.ts run daemon
   ) >> "$LOGS/buyer${N}.log" 2>&1 &
 
