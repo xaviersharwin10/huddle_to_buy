@@ -112,6 +112,13 @@ const ERC20_ABI = [
 const BUYER_PROFILE_ABI = [
   {
     type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
     name: "mintProfile",
     stateMutability: "nonpayable",
     inputs: [{ name: "storageUri", type: "string" }],
@@ -376,6 +383,18 @@ export async function mintBuyerProfile0G(
   const account = privateKeyToAccount(cfg.privateKey);
   const wallet = createWalletClient({ account, chain, transport: http(cfg.rpcUrl) });
   const publicClient = createPublicClient({ chain, transport: http(cfg.rpcUrl), pollingInterval: 5_000 });
+
+  // All buyers share the same ZEROG_PRIVATE_KEY — skip mint if the address
+  // already has a profile token (would cause a nonce conflict otherwise).
+  const balance = await publicClient.readContract({
+    address: cfg.buyerProfileAddress,
+    abi: BUYER_PROFILE_ABI,
+    functionName: "balanceOf",
+    args: [account.address],
+  });
+  if (balance > 0n) {
+    return null; // caller logs "already minted"
+  }
 
   const hash = await wallet.writeContract({
     address: cfg.buyerProfileAddress,

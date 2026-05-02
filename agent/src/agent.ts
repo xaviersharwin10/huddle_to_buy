@@ -165,10 +165,21 @@ export class HuddleAgent {
           this.log(`0G Storage: skipped (set ZEROG_FLOW_ADDRESS to enable) → ${storageUri}`);
         }
 
+        // Stagger mints by port so buyers sharing a ZEROG key don't submit
+        // the same nonce simultaneously (PORT 3001→0s, 3002→12s, 3003→24s).
+        const agentPort = Number(process.env.PORT ?? "3001");
+        const mintDelay = Math.max(0, agentPort - 3001) * 12_000;
+        if (mintDelay > 0) {
+          this.log(`0G iNFT: staggering mint by ${mintDelay / 1000}s to avoid nonce conflict`);
+          await new Promise<void>((r) => setTimeout(r, mintDelay));
+        }
+
         const result = await mintBuyerProfile0G(this.zeroGProfile, storageUri);
         if (result) {
           this.myTokenId = result.tokenId;
           this.log(`0G iNFT: mintProfile tx=${result.txHash} tokenId=${result.tokenId} uri=${storageUri}`);
+        } else {
+          this.log("0G iNFT: profile already minted for this address — skipping");
         }
       } catch (e) {
         this.log(`0G iNFT mint failed: ${(e as Error).message}`);
