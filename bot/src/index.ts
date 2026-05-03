@@ -148,6 +148,33 @@ async function submitIntent(agentPort: number, intent: object): Promise<void> {
   if (!res.ok) throw new Error(`Agent rejected intent: ${await res.text()}`);
 }
 
+// Regex-based fallback parser — used when Gemini is unavailable or over quota.
+const KNOWN_PRODUCTS: [RegExp, string, number][] = [
+  [/claude\s*(pro|subscription|ai)?/i, "claude-pro-subscription", 23],
+  [/chatgpt\s*(plus)?|gpt[-\s]?4/i, "chatgpt-plus-subscription", 23],
+  [/h100/i, "h100-pcie-hour", 3.50],
+  [/a100/i, "a100-pcie-hour", 2.00],
+  [/midjourney/i, "midjourney-subscription", 11],
+  [/cursor(\s*pro)?/i, "cursor-pro-subscription", 22],
+  [/notion(\s*ai)?/i, "notion-ai-subscription", 11],
+];
+
+function parseIntentFallback(text: string): { sku: string; maxPrice: number; qty: number } | null {
+  const qtyMatch = text.match(/(\d+)\s*(hour|hr|unit|month|year|person|people|user|x)/i);
+  const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
+  const priceMatch = text.match(/\$(\d+(?:\.\d+)?)/i);
+
+  for (const [regex, sku, defaultPrice] of KNOWN_PRODUCTS) {
+    if (regex.test(text)) {
+      const maxPrice = priceMatch ? parseFloat(priceMatch[1]) : defaultPrice;
+      return { sku, maxPrice, qty };
+    }
+  }
+  return null;
+}
+
+const PURCHASE_KEYWORDS = /\b(buy|get|want|purchase|need|order|subscribe|subscription|hour|gpu)\b/i;
+
 // Natural Language Intent Parsing
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
@@ -155,15 +182,14 @@ bot.on("message", async (msg) => {
 
   if (text.startsWith("/")) return;
 
-  if (!GOOGLE_AI_API_KEY) {
-    return bot.sendMessage(chatId, "Google AI API key is missing. Please set GOOGLE_AI_API_KEY in the .env file.");
-  }
-
   let sku: string, maxPrice: number, qty: number;
 
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const prompt = `You are a purchasing intent parser for an AI agent coalition marketplace.
+  // Try Gemini first if API key is set
+  let geminiParsed: { sku: string; maxPrice: number; qty: number } | null = null;
+  if (GOOGLE_AI_API_KEY) {
+    try {
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const prompt = `You are a purchasing intent parser for an AI agent coalition marketplace.
 
 Given a natural language message, extract a purchase intent. Follow these rules strictly:
 
@@ -195,11 +221,38 @@ Return ONLY a raw JSON object — no markdown, no backticks, no explanation.
 
 Message: "${text}"`;
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text().trim().replace(/```json/g, "").replace(/```/g, "").trim();
-    const parsed = JSON.parse(responseText);
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text().trim().replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(responseText);
 
-    if (parsed.error === "not_a_purchase") {
+      if (parsed.error === "not_a_purchase") {
+        return bot.sendMessage(
+          chatId,
+          "I'm here to help you buy things as a group! Just tell me what you want, for example:\n\n" +
+          "• _I want a Claude Pro subscription_\n" +
+          "• _Get me 5 hours of H100 GPU time_\n" +
+          "• _Buy Midjourney for 3 people_",
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      const s = parsed.sku;
+      const mp = parseFloat(parsed.maxPrice);
+      const q = parseInt(parsed.qty, 10);
+      if (s && !isNaN(mp) && !isNaN(q)) {
+        geminiParsed = { sku: s, maxPrice: mp, qty: q };
+      }
+    } catch (err) {
+      console.error("Gemini parsing error (will try regex fallback):", (err as Error).message ?? String(err));
+    }
+  }
+
+  // Fallback: regex parser
+  const fallback = geminiParsed ?? parseIntentFallback(text);
+
+  if (!fallback) {
+    // If no purchase keywords at all, prompt the user
+    if (!PURCHASE_KEYWORDS.test(text)) {
       return bot.sendMessage(
         chatId,
         "I'm here to help you buy things as a group! Just tell me what you want, for example:\n\n" +
@@ -209,17 +262,6 @@ Message: "${text}"`;
         { parse_mode: "Markdown" }
       );
     }
-
-    sku = parsed.sku;
-    maxPrice = parseFloat(parsed.maxPrice);
-    qty = parseInt(parsed.qty, 10);
-
-    if (!sku || isNaN(maxPrice) || isNaN(qty)) {
-      throw new Error("Missing or invalid fields in extracted JSON");
-    }
-  } catch (err) {
-    const errMsg = (err as Error).message ?? String(err);
-    console.error("Gemini parsing error:", errMsg);
     return bot.sendMessage(
       chatId,
       "I didn't quite catch that. Try something like:\n\n" +
@@ -229,6 +271,10 @@ Message: "${text}"`;
       { parse_mode: "Markdown" }
     );
   }
+
+  sku = fallback.sku;
+  maxPrice = fallback.maxPrice;
+  qty = fallback.qty;
 
   const agentPort = users[chatId]?.agentPort || 3001;
   const intent = {
