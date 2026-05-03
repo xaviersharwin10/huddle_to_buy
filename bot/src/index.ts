@@ -162,7 +162,7 @@ bot.on("message", async (msg) => {
   let sku: string, maxPrice: number, qty: number;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const prompt = `You are a purchasing intent parser for an AI agent coalition marketplace.
 
 Given a natural language message, extract a purchase intent. Follow these rules strictly:
@@ -218,7 +218,8 @@ Message: "${text}"`;
       throw new Error("Missing or invalid fields in extracted JSON");
     }
   } catch (err) {
-    console.error("Gemini parsing error:", err);
+    const errMsg = (err as Error).message ?? String(err);
+    console.error("Gemini parsing error:", errMsg);
     return bot.sendMessage(
       chatId,
       "I didn't quite catch that. Try something like:\n\n" +
