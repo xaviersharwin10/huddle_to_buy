@@ -139,6 +139,12 @@ bot.onText(/\/faucet/, async (msg) => {
   }
 });
 
+bot.onText(/\/reset/, (msg) => {
+  const chatId = msg.chat.id;
+  delete lastStatusMap[chatId];
+  bot.sendMessage(chatId, "✅ Coalition state reset. Your next purchase intent will start fresh.");
+});
+
 async function submitIntent(agentPort: number, intent: object): Promise<void> {
   const res = await fetch(`http://127.0.0.1:${agentPort}/submit`, {
     method: "POST",
