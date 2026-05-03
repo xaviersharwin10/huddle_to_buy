@@ -277,6 +277,8 @@ Message: "${text}"`;
   qty = fallback.qty;
 
   const agentPort = users[chatId]?.agentPort || 3001;
+  // All buyers must receive the EXACT same intent object (same deadline_ms)
+  // so their commitment hashes match and GossipSub can form a coalition.
   const intent = {
     sku: sku!,
     max_unit_price: maxPrice!,
@@ -290,37 +292,47 @@ Message: "${text}"`;
     { parse_mode: "Markdown" }
   );
 
-  try {
-    await submitIntent(agentPort, intent);
-    if (!lastStatusMap[chatId]) lastStatusMap[chatId] = {};
-    // Pre-seed all current commit statuses so stale settled coalitions
-    // from previous runs don't fire false "Purchase Complete" notifications.
-    try {
-      const snap = await fetch(`http://127.0.0.1:${agentPort}/status`);
-      if (snap.ok) {
-        const snapData = await snap.json();
-        for (const c of (snapData.myCommits || [])) {
-          lastStatusMap[chatId][c.commitment] = c.statusStr;
-        }
-      }
-    } catch {}
-  } catch (error) {
-    const errMsg = (error as Error).message;
-    const isOffline = errMsg.includes("ECONNREFUSED") || errMsg.includes("fetch failed");
+  if (!lastStatusMap[chatId]) lastStatusMap[chatId] = {};
 
-    if (isOffline) {
-      if (!intentQueue[chatId]) intentQueue[chatId] = [];
-      intentQueue[chatId].push({ intent, agentPort, sku: sku!, retries: 0 });
-      if (!lastStatusMap[chatId]) lastStatusMap[chatId] = {};
-      bot.sendMessage(
-        chatId,
-        `⏳ Agent node is starting up. Your intent for *${sku!}* is queued and will broadcast automatically once the node is online.`,
-        { parse_mode: "Markdown" }
-      );
-    } else {
-      console.error("Intent submission error:", error);
-      bot.sendMessage(chatId, `❌ Error submitting intent: ${errMsg}`);
+  // Submit to all buyer agents so all 3 independently commit to the same hash.
+  // Coalition requires k=3 matching commits — a single user's assigned port alone
+  // would never reach threshold.
+  let anySucceeded = false;
+  for (const port of AVAILABLE_PORTS) {
+    try {
+      await submitIntent(port, intent);
+      anySucceeded = true;
+      // Pre-seed status snapshot from the user's assigned port to avoid
+      // replaying stale "Purchase Complete" from previous coalitions.
+      if (port === agentPort) {
+        try {
+          const snap = await fetch(`http://127.0.0.1:${port}/status`);
+          if (snap.ok) {
+            const snapData = await snap.json();
+            for (const c of (snapData.myCommits || [])) {
+              lastStatusMap[chatId][c.commitment] = c.statusStr;
+            }
+          }
+        } catch {}
+      }
+    } catch (error) {
+      const errMsg = (error as Error).message;
+      const isOffline = errMsg.includes("ECONNREFUSED") || errMsg.includes("fetch failed");
+      if (isOffline) {
+        if (!intentQueue[chatId]) intentQueue[chatId] = [];
+        intentQueue[chatId].push({ intent, agentPort: port, sku: sku!, retries: 0 });
+      } else {
+        console.error(`Intent submission error on port ${port}:`, errMsg);
+      }
     }
+  }
+
+  if (!anySucceeded) {
+    bot.sendMessage(
+      chatId,
+      `⏳ Agent nodes are starting up. Your intent for *${sku!}* is queued and will broadcast automatically once the nodes are online.`,
+      { parse_mode: "Markdown" }
+    );
   }
 });
 
