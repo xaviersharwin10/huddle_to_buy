@@ -298,11 +298,28 @@ Message: "${text}"`;
     { parse_mode: "Markdown" }
   );
 
-  // Build the pre-seed snapshot into a local object first, then assign it
-  // atomically to lastStatusMap. This prevents the polling setInterval from
-  // firing between "map created empty" and "pre-seed filled", which would
-  // see prevStatus="" vs "Settled (commit ready)" and send a stale notification.
-  const preSeed: Record<string, string> = { ...(lastStatusMap[chatId] ?? {}) };
+  // Pre-seed: only carry over address-tagged settled entries ("Settled:0x...").
+  // Intermediate states (Negotiating, Tier Offer Received, etc.) are intentionally
+  // dropped — they may reflect another concurrent user's coalition on the shared agent
+  // and would wrongly suppress catch-up messages for this user's new purchase.
+  const preSeed: Record<string, string> = {};
+  for (const [c, s] of Object.entries(lastStatusMap[chatId] ?? {})) {
+    if (s.startsWith("Settled:")) preSeed[c] = s;
+  }
+
+  // Pre-seed currently-settled coalitions with their address so a stale "Purchase
+  // Complete!" is never fired for a coalition that settled before this user submitted.
+  try {
+    const snap = await fetch(`http://127.0.0.1:${agentPort}/status`);
+    if (snap.ok) {
+      const snapData = await snap.json();
+      for (const c of (snapData.myCommits || [])) {
+        if (c.statusStr === "Settled (commit ready)" && c.address && !preSeed[c.commitment]) {
+          preSeed[c.commitment] = `Settled:${c.address}`;
+        }
+      }
+    }
+  } catch {}
 
   // Submit to all buyer agents so all 3 independently commit to the same hash.
   // Coalition requires k=3 matching commits — a single user's assigned port alone
@@ -312,19 +329,6 @@ Message: "${text}"`;
     try {
       await submitIntent(port, intent);
       anySucceeded = true;
-      // Pre-seed from the user's assigned port only — captures current state
-      // of all known commitments so stale "Settled" coalitions aren't re-fired.
-      if (port === agentPort) {
-        try {
-          const snap = await fetch(`http://127.0.0.1:${port}/status`);
-          if (snap.ok) {
-            const snapData = await snap.json();
-            for (const c of (snapData.myCommits || [])) {
-              preSeed[c.commitment] = c.statusStr;
-            }
-          }
-        } catch {}
-      }
     } catch (error) {
       const errMsg = (error as Error).message;
       const isOffline = errMsg.includes("ECONNREFUSED") || errMsg.includes("fetch failed");
@@ -398,12 +402,93 @@ setInterval(async () => {
         const { commitment, sku, qty, max_unit_price, statusStr, clusterSize, offer, address, x402TxHash, fundTx, zeroGSealTx } = commit;
         const prevStatus = userTracked[commitment] || "";
 
-        if (prevStatus !== statusStr) {
+        // "Settled:0x..." is the stored sentinel after a coalition is notified.
+        // It intentionally differs from "Settled (commit ready)" so a new coalition
+        // (possibly at a different address) always re-enters the change handler.
+        const prevIsTaggedSettled = prevStatus.startsWith("Settled:");
+        const prevSettledAddr = prevIsTaggedSettled ? prevStatus.slice("Settled:".length) : null;
+
+        // No change: skip. But "Settled:0xOLD" !== "Settled (commit ready)" so
+        // a new settlement always passes through this guard.
+        if (!prevIsTaggedSettled && prevStatus === statusStr) continue;
+
+        if (statusStr === "Settled (commit ready)") {
+          // Same coalition already notified — skip.
+          if (prevSettledAddr && prevSettledAddr === address) continue;
+
+          // New coalition settled. Tag with address so repeat settlements for the
+          // same commitment hash (same SKU/price/qty) don't re-fire.
+          userTracked[commitment] = `Settled:${address || "unknown"}`;
+          console.log(`[status] chat=${chatId} sku=${sku} ${prevStatus || "—"} → Settled addr=${address}`);
+
+          // Catch-up: send any intermediate messages skipped because the coalition
+          // formed faster than the 1500ms poll interval, or because the previous
+          // prevStatus was a "Settled:..." sentinel from a prior coalition.
+          // Using "" as effectivePrev when coming from a tagged-settled ensures all
+          // intermediates fire (prevIdx = -1 from STATUS_ORDER lookup → all true).
+          const STATUS_ORDER = [
+            "Broadcasting Intent",
+            "Negotiating Tier Price",
+            "Tier Offer Received",
+            "Deploying Coalition",
+            "Settled (commit ready)",
+          ];
+          const effectivePrev = prevIsTaggedSettled ? "" : prevStatus;
+          const prevIdx = STATUS_ORDER.indexOf(effectivePrev || "Broadcasting Intent");
+          const needsNegotiating = prevIdx < STATUS_ORDER.indexOf("Negotiating Tier Price");
+          const needsOffer       = prevIdx < STATUS_ORDER.indexOf("Tier Offer Received");
+          const needsDeploy      = prevIdx < STATUS_ORDER.indexOf("Deploying Coalition");
+
+          // Await each message so Telegram delivers them in the correct order.
+          if (needsNegotiating) {
+            await bot.sendMessage(chatId, `🤖 I found ${clusterSize} peers on the AXL mesh! Forming a coalition...`);
+          }
+          if (needsOffer && offer) {
+            await bot.sendMessage(
+              chatId,
+              `🗣️ I am negotiating with the seller...\nThey offered $${offer.tierUnitPrice} / unit (valid until ${new Date(offer.validUntilMs).toLocaleTimeString()})!`
+            );
+          }
+          if (needsDeploy && address) {
+            await bot.sendMessage(
+              chatId,
+              `💸 Offer accepted! Contract deployed at \`${address}\`.\nI am autonomously signing the transaction to pool your funds...`,
+              { parse_mode: "Markdown" }
+            );
+          }
+
+          const discount = max_unit_price - (offer?.tierUnitPrice || max_unit_price);
+          const totalSaved = discount * qty;
+
+          const explorerBase = "https://gensyn-testnet.explorer.alchemy.com";
+          const shortTx = (tx: string) => tx.slice(0, 10) + "…" + tx.slice(-6);
+
+          const techLines: string[] = [
+            `\n🔬 *Powered by:*`,
+            `• *AXL (Gensyn)*: P2P gossip mesh — ${clusterSize} buyers formed coalition`,
+            x402TxHash
+              ? `• *X402*: 0.01 MockUSDC micro-payment to seller → [${shortTx(x402TxHash)}](${explorerBase}/tx/${x402TxHash})`
+              : `• *X402*: price discovery via GossipSub`,
+            `• *0G Compute*: AI agent accepted the bulk offer`,
+            zeroGSealTx
+              ? `• *0G iNFT*: coalition outcome sealed on 0G Testnet → [${shortTx(zeroGSealTx)}](https://chainscan-galileo.0g.ai/tx/${zeroGSealTx})`
+              : `• *0G iNFT*: buyer profile minted on 0G Testnet`,
+            `• *KeeperHub*: autonomous commit() trigger queued`,
+          ];
+
+          await bot.sendMessage(
+            chatId,
+            `✅ **Purchase Complete!**\n\nItem: ${sku} (Qty: ${qty})\nOriginal Price: $${max_unit_price.toFixed(2)}\nBulk Price: $${offer?.tierUnitPrice?.toFixed(2) || "N/A"}\nTotal Saved: $${totalSaved.toFixed(2)}\n\n🔗 [Coalition Contract](${explorerBase}/address/${address})` + techLines.join("\n"),
+            { parse_mode: "Markdown", disable_web_page_preview: true }
+          );
+
+        } else {
+          // Non-settled status transition.
           userTracked[commitment] = statusStr;
           console.log(`[status] chat=${chatId} sku=${sku} ${prevStatus || "—"} → ${statusStr}`);
 
           if (statusStr === "Broadcasting Intent") {
-            // Let UI handle it natively
+            // no message — user already saw "Got it!" from the submit handler
           } else if (statusStr.startsWith("Declined:")) {
             const reason = statusStr.replace("Declined:", "").trim();
             let msg: string;
@@ -427,63 +512,6 @@ setInterval(async () => {
               chatId,
               `💸 Offer accepted! Contract deployed at \`${address}\`.\nI am autonomously signing the transaction to pool your funds...`,
               { parse_mode: "Markdown" }
-            );
-          } else if (statusStr === "Settled (commit ready)") {
-            // The coalition can form faster than the 1500ms poll interval.
-            // If intermediate states were skipped, send their messages now so
-            // the user sees the full flow before "Purchase Complete!".
-            const STATUS_ORDER = [
-              "Broadcasting Intent",
-              "Negotiating Tier Price",
-              "Tier Offer Received",
-              "Deploying Coalition",
-              "Settled (commit ready)",
-            ];
-            const prevIdx = STATUS_ORDER.indexOf(prevStatus || "Broadcasting Intent");
-            const needsNegotiating = prevIdx < STATUS_ORDER.indexOf("Negotiating Tier Price");
-            const needsOffer      = prevIdx < STATUS_ORDER.indexOf("Tier Offer Received");
-            const needsDeploy     = prevIdx < STATUS_ORDER.indexOf("Deploying Coalition");
-
-            if (needsNegotiating) {
-              bot.sendMessage(chatId, `🤖 I found ${clusterSize} peers on the AXL mesh! Forming a coalition...`);
-            }
-            if (needsOffer && offer) {
-              bot.sendMessage(
-                chatId,
-                `🗣️ I am negotiating with the seller...\nThey offered $${offer.tierUnitPrice} / unit (valid until ${new Date(offer.validUntilMs).toLocaleTimeString()})!`
-              );
-            }
-            if (needsDeploy && address) {
-              bot.sendMessage(
-                chatId,
-                `💸 Offer accepted! Contract deployed at \`${address}\`.\nI am autonomously signing the transaction to pool your funds...`,
-                { parse_mode: "Markdown" }
-              );
-            }
-
-            const discount = max_unit_price - (offer?.tierUnitPrice || max_unit_price);
-            const totalSaved = discount * qty;
-
-            const explorerBase = "https://gensyn-testnet.explorer.alchemy.com";
-            const shortTx = (tx: string) => tx.slice(0, 10) + "…" + tx.slice(-6);
-
-            const techLines: string[] = [
-              `\n🔬 *Powered by:*`,
-              `• *AXL (Gensyn)*: P2P gossip mesh — ${clusterSize} buyers formed coalition`,
-              x402TxHash
-                ? `• *X402*: 0.01 MockUSDC micro-payment to seller → [${shortTx(x402TxHash)}](${explorerBase}/tx/${x402TxHash})`
-                : `• *X402*: price discovery via GossipSub`,
-              `• *0G Compute*: AI agent accepted the bulk offer`,
-              zeroGSealTx
-                ? `• *0G iNFT*: coalition outcome sealed on 0G Testnet → [${shortTx(zeroGSealTx)}](https://chainscan-galileo.0g.ai/tx/${zeroGSealTx})`
-                : `• *0G iNFT*: buyer profile minted on 0G Testnet`,
-              `• *KeeperHub*: autonomous commit() trigger queued`,
-            ];
-
-            bot.sendMessage(
-              chatId,
-              `✅ **Purchase Complete!**\n\nItem: ${sku} (Qty: ${qty})\nOriginal Price: $${max_unit_price.toFixed(2)}\nBulk Price: $${offer?.tierUnitPrice?.toFixed(2) || "N/A"}\nTotal Saved: $${totalSaved.toFixed(2)}\n\n🔗 [Coalition Contract](${explorerBase}/address/${address})` + techLines.join("\n"),
-              { parse_mode: "Markdown", disable_web_page_preview: true }
             );
           }
         }
