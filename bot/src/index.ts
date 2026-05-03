@@ -423,6 +423,38 @@ setInterval(async () => {
               { parse_mode: "Markdown" }
             );
           } else if (statusStr === "Settled (commit ready)") {
+            // The coalition can form faster than the 1500ms poll interval.
+            // If intermediate states were skipped, send their messages now so
+            // the user sees the full flow before "Purchase Complete!".
+            const STATUS_ORDER = [
+              "Broadcasting Intent",
+              "Negotiating Tier Price",
+              "Tier Offer Received",
+              "Deploying Coalition",
+              "Settled (commit ready)",
+            ];
+            const prevIdx = STATUS_ORDER.indexOf(prevStatus || "Broadcasting Intent");
+            const needsNegotiating = prevIdx < STATUS_ORDER.indexOf("Negotiating Tier Price");
+            const needsOffer      = prevIdx < STATUS_ORDER.indexOf("Tier Offer Received");
+            const needsDeploy     = prevIdx < STATUS_ORDER.indexOf("Deploying Coalition");
+
+            if (needsNegotiating) {
+              bot.sendMessage(chatId, `🤖 I found ${clusterSize} peers on the AXL mesh! Forming a coalition...`);
+            }
+            if (needsOffer && offer) {
+              bot.sendMessage(
+                chatId,
+                `🗣️ I am negotiating with the seller...\nThey offered $${offer.tierUnitPrice} / unit (valid until ${new Date(offer.validUntilMs).toLocaleTimeString()})!`
+              );
+            }
+            if (needsDeploy && address) {
+              bot.sendMessage(
+                chatId,
+                `💸 Offer accepted! Contract deployed at \`${address}\`.\nI am autonomously signing the transaction to pool your funds...`,
+                { parse_mode: "Markdown" }
+              );
+            }
+
             const discount = max_unit_price - (offer?.tierUnitPrice || max_unit_price);
             const totalSaved = discount * qty;
 
