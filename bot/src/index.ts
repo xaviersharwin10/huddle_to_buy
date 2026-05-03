@@ -371,12 +371,11 @@ setInterval(async () => {
   for (const chatIdStr of Object.keys(lastStatusMap)) {
     const chatId = Number(chatIdStr);
     const userTracked = lastStatusMap[chatId];
-    const user = users[chatId];
-
-    if (!user) continue;
+    // Fall back to port 3001 if user never did /start (e.g. after a redeploy).
+    const agentPollPort = users[chatId]?.agentPort ?? 3001;
 
     try {
-      const res = await fetch(`http://127.0.0.1:${user.agentPort}/status`);
+      const res = await fetch(`http://127.0.0.1:${agentPollPort}/status`);
       if (!res.ok) continue;
 
       const data = await res.json();

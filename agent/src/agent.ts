@@ -761,6 +761,13 @@ export class HuddleAgent {
       cluster.fundedByMe = true;
       cluster.fundTx = fundTx;
 
+      // KeeperHub: auto-register commit/refund workflows — coordinator only.
+      if (cluster.coordinator === this.myPeerId) {
+        this.registerKeeperHub(coalitionAddress).catch((err: unknown) =>
+          this.log(`KeeperHub registration failed: ${(err as Error).message}`)
+        );
+      }
+
       // Seal the coalition outcome into the buyer's 0G iNFT (best-effort).
       const sample = [...cluster.members.values()][0];
       if (this.zeroGProfile && this.myTokenId !== null) {
@@ -864,6 +871,58 @@ export class HuddleAgent {
       this.clusters.set(c, cl);
     }
     return cl;
+  }
+
+  private async registerKeeperHub(coalitionAddress: `0x${string}`): Promise<void> {
+    const apiKey = process.env.KEEPERHUB_API_KEY ?? "";
+    if (!apiKey) return; // silently skip if not configured
+    const base = (process.env.KEEPERHUB_API_URL ?? "https://app.keeperhub.com").replace(/\/$/, "");
+
+    const khPost = async (body: object) => {
+      const res = await fetch(`${base}/api/workflows/create`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`KeeperHub ${res.status}: ${text}`);
+      return JSON.parse(text);
+    };
+
+    const cfg = (label: string, fn: string) => ({
+      contractAddress: coalitionAddress,
+      network: "gensynTestnet",
+      chainId: 685685,
+      function: fn,
+      ...(fn.includes("(address") ? {} : {}),
+    });
+
+    const w1 = {
+      name: `huddle-commit-${coalitionAddress.slice(0, 8)}`,
+      description: `Huddle coalition commit trigger. Contract: ${coalitionAddress}`,
+      nodes: [
+        { id: "trigger", type: "trigger", data: { type: "trigger", label: "BuyerFunded event", config: { contractAddress: coalitionAddress, network: "gensynTestnet", chainId: 685685, event: "BuyerFunded(address,uint256,uint256)", fields: ["buyer", "amount", "fundedCount"] } }, position: { x: 0, y: 0 } },
+        { id: "condition", type: "condition", data: { type: "condition", label: "threshold met?", config: { expression: "funded_count == requiredBuyers && now <= validUntil && state == 1" } }, position: { x: 300, y: 0 } },
+        { id: "action", type: "action", data: { type: "action", label: "commit()", config: cfg("commit()", "commit()") }, position: { x: 600, y: 0 } },
+      ],
+      edges: [{ id: "e1", source: "trigger", target: "condition" }, { id: "e2", source: "condition", target: "action" }],
+    };
+
+    const w2 = {
+      name: `huddle-refund-${coalitionAddress.slice(0, 8)}`,
+      description: `Huddle coalition refund trigger. Contract: ${coalitionAddress}`,
+      nodes: [
+        { id: "trigger", type: "trigger", data: { type: "trigger", label: "BuyerFunded event", config: { contractAddress: coalitionAddress, network: "gensynTestnet", chainId: 685685, event: "BuyerFunded(address,uint256,uint256)", fields: ["buyer", "amount", "fundedCount"] } }, position: { x: 0, y: 0 } },
+        { id: "condition", type: "condition", data: { type: "condition", label: "deadline expired?", config: { expression: "now > validUntil && (state == 0 || state == 1)" } }, position: { x: 300, y: 0 } },
+        { id: "action", type: "action", data: { type: "action", label: "refundAll()", config: cfg("refundAll()", "refundAll()") }, position: { x: 600, y: 0 } },
+      ],
+      edges: [{ id: "e1", source: "trigger", target: "condition" }, { id: "e2", source: "condition", target: "action" }],
+    };
+
+    const r1 = await khPost(w1);
+    this.log(`KeeperHub: commit workflow registered id=${r1.id} coalition=${coalitionAddress}`);
+    const r2 = await khPost(w2);
+    this.log(`KeeperHub: refund workflow registered id=${r2.id} coalition=${coalitionAddress}`);
   }
 }
 
