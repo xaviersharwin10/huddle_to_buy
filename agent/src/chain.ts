@@ -472,7 +472,9 @@ export async function sealCoalitionInference(args: {
     args: [tokenId, inferenceHash],
     gas: 150_000n,
   });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 180_000 });
+  // 0G testnet is slow — return the hash immediately and confirm in background.
+  // The tx is already submitted; we don't need to block the coalition flow on it.
+  publicClient.waitForTransactionReceipt({ hash, timeout: 300_000 }).catch(() => {});
   return hash;
 }
 
