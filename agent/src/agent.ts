@@ -258,6 +258,19 @@ export class HuddleAgent {
     const c = commitment(intent);
     const nonce = newNonce();
     this.myCommits.set(c, { intent, nonce });
+
+    // Clear the reveal-gate so a new coalition can form for repeat purchases
+    // of the same SKU/price/qty (same commitment hash). Safe unconditionally:
+    // if a coalition is in-flight, reveals are idempotent. If fully settled
+    // (fundedByMe), delete the old cluster so the agent starts completely fresh.
+    this.revealsInitiated.delete(c);
+    const prevCluster = this.clusters.get(c);
+    if (prevCluster?.fundedByMe) {
+      if (prevCluster.fallbackTimer) clearTimeout(prevCluster.fallbackTimer);
+      this.clusters.delete(c);
+      this.log(`submit: cleared settled cluster for c=${short(c)} — starting new round`);
+    }
+
     this.observer.observe(c, this.myPeerId);
     this.log(`submit ${JSON.stringify(intent)}  c=${short(c)}`);
 
