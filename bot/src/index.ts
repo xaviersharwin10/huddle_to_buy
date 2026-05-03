@@ -292,7 +292,11 @@ Message: "${text}"`;
     { parse_mode: "Markdown" }
   );
 
-  if (!lastStatusMap[chatId]) lastStatusMap[chatId] = {};
+  // Build the pre-seed snapshot into a local object first, then assign it
+  // atomically to lastStatusMap. This prevents the polling setInterval from
+  // firing between "map created empty" and "pre-seed filled", which would
+  // see prevStatus="" vs "Settled (commit ready)" and send a stale notification.
+  const preSeed: Record<string, string> = { ...(lastStatusMap[chatId] ?? {}) };
 
   // Submit to all buyer agents so all 3 independently commit to the same hash.
   // Coalition requires k=3 matching commits — a single user's assigned port alone
@@ -302,15 +306,15 @@ Message: "${text}"`;
     try {
       await submitIntent(port, intent);
       anySucceeded = true;
-      // Pre-seed status snapshot from the user's assigned port to avoid
-      // replaying stale "Purchase Complete" from previous coalitions.
+      // Pre-seed from the user's assigned port only — captures current state
+      // of all known commitments so stale "Settled" coalitions aren't re-fired.
       if (port === agentPort) {
         try {
           const snap = await fetch(`http://127.0.0.1:${port}/status`);
           if (snap.ok) {
             const snapData = await snap.json();
             for (const c of (snapData.myCommits || [])) {
-              lastStatusMap[chatId][c.commitment] = c.statusStr;
+              preSeed[c.commitment] = c.statusStr;
             }
           }
         } catch {}
@@ -326,6 +330,9 @@ Message: "${text}"`;
       }
     }
   }
+
+  // Atomically expose the pre-seeded map to the polling loop.
+  lastStatusMap[chatId] = preSeed;
 
   if (!anySucceeded) {
     bot.sendMessage(
