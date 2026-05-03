@@ -765,6 +765,12 @@ export class HuddleAgent {
       const sample = [...cluster.members.values()][0];
       if (this.zeroGProfile && this.myTokenId !== null) {
         try {
+          // Stagger seal calls — buyers sharing ZEROG_PRIVATE_KEY would
+          // otherwise submit the same nonce simultaneously.
+          const sealPort = Number(process.env.PORT ?? "3001");
+          const sealDelay = Math.max(0, sealPort - 3001) * 15_000;
+          if (sealDelay > 0) await new Promise<void>((r) => setTimeout(r, sealDelay));
+
           const sealTx = await sealCoalitionInference({
             cfg: this.zeroGProfile,
             tokenId: this.myTokenId,
