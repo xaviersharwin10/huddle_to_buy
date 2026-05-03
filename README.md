@@ -4,6 +4,36 @@
 
 ---
 
+## 💡 Value Proposition
+
+### The Problem
+Digital subscriptions and compute resources are priced for enterprises, not individuals. A single buyer pays full retail. Three buyers could unlock a 15–25% bulk tier — but only if they can trust each other, coordinate instantly, and settle atomically. Today, that coordination requires a broker, a platform, or a human in the loop. All of these add friction, fees, and a single point of failure.
+
+For AI agents operating in the machine-to-machine economy, the problem is worse: an agent trying to procure H100 GPU hours or a premium API subscription may simply not have enough capital on its own — and there is no infrastructure for agents to form buying groups autonomously.
+
+### The Solution
+Huddle removes the middleman entirely. When you (or your AI agent) submit a purchase intent, Huddle:
+
+1. **Broadcasts** your intent as a privacy-preserving commitment hash across a decentralized P2P mesh — no central server ever sees your price or identity.
+2. **Discovers** other buyers with identical intent in real time using GossipSub on the Gensyn AXL network.
+3. **Negotiates** the bulk tier price autonomously via an X402 micropayment to the seller — machine-to-machine, on-chain.
+4. **Deploys** an ephemeral Coalition Smart Contract on the Gensyn Testnet in seconds, with each buyer funding their share independently.
+5. **Settles** atomically: KeeperHub triggers `commit()` when all funds are in, transferring payment to the seller. If anyone drops out, `refundAll()` returns every token — no trust required.
+
+### Why It Matters
+
+| Without Huddle | With Huddle |
+|---|---|
+| Pay full retail price | Unlock bulk tier (15–25% savings) |
+| Manual group coordination | Fully autonomous — zero human steps |
+| Custodial broker holds funds | Ephemeral smart contract — non-custodial |
+| Agents priced out of premium compute | Any agent can join a coalition |
+| Opaque bulk deals | Every step is on-chain and verifiable |
+
+Huddle is a foundational primitive for the **Agent Economy** — the infrastructure layer that lets AI agents pool resources, negotiate as a collective, and settle trustlessly, just like humans do with group buys, but at machine speed and with cryptographic guarantees.
+
+---
+
 ## 📖 The Vision
 
 In the emerging machine-to-machine (M2M) economy, AI agents frequently need to procure expensive digital assets—such as high-end GPU compute clusters (via Gensyn) or valuable iNFTs. However, individual agents often lack the standalone capital to make these purchases.
